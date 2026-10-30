@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ey_bi_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ey_bi
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../db/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ../db/02_views.sql:/docker-entrypoint-initdb.d/02_views.sql
+      - ../db/03_roles.sql:/docker-entrypoint-initdb.d/03_roles.sql
+      - ../db/seed/seed_data.sql:/docker-entrypoint-initdb.d/04_seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ey_bi"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ey_bi_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.backend
+    container_name: ey_bi_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=Conversational BI / Data Agent
+      - APP_TIMEZONE=Asia/Jakarta
+      - AS_OF_DATE=2026-10-29
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.8-flash}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
+      - DATABASE_URL_RO=postgresql://bi_readonly:bi_readonly_secure_password@postgres:5432/ey_bi
+      - DATABASE_URL_ADMIN=postgresql://postgres:postgrespassword@postgres:5432/ey_bi
+      - REDIS_URL=redis://redis:6379/0
+      - VECTOR_ENABLED=false
+      - LANGFUSE_PUBLIC_KEY=pk-lf-local-ey-bi
+      - LANGFUSE_SECRET_KEY=sk-lf-local-ey-bi
+      - LANGFUSE_HOST=http://langfuse:3000
+      - LANGFUSE_ENABLED=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: ey_bi_langfuse
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3005:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgrespassword@postgres:5432/langfuse
+      - NEXTAUTH_URL=http://localhost:3005
+      - NEXTAUTH_SECRET=my-very-secure-nextauth-secret-key-12345
+      - SALT=my-very-secure-salt-key-12345
+      - TELEMETRY_ENABLED=false
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: ey_bi_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  redisdata:
