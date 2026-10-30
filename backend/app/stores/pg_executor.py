@@ -1,7 +1,7 @@
 """
 Database Query Executor for Conversational BI Agent.
 Connects strictly via Read-Only role on PostgreSQL with timeout guardrails.
-Transparently falls back to local embedded DuckDB if PostgreSQL is offline (zero-dependency local mode).
+Transparently falls back to local embedded DuckDB if PostgreSQL is offline (zero-dependency local/cloud mode).
 """
 
 import time
@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 from backend.app.core.config import settings
 
 _duckdb_con = None
+_pg_localhost_offline = False
 
 
 def _get_duckdb_connection():
@@ -30,14 +31,15 @@ def _get_duckdb_connection():
                 with open(seed_file) as f:
                     init_con.execute(f.read())
                 if os.path.exists(views_file):
-                    init_con.execute(open(views_file).read().replace("::numeric", "::DOUBLE"))
+                    with open(views_file) as vf:
+                        init_con.execute(vf.read().replace("::numeric", "::DOUBLE"))
             init_con.close()
 
         # Connect strictly with read_only=True for concurrent access
         con = duckdb.connect(db_path, read_only=True)
         _duckdb_con = con
         return _duckdb_con
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -67,45 +69,48 @@ def execute_readonly_sql(sql: str, timeout_ms: Optional[int] = None) -> QueryExe
     Executes a sanitized SELECT SQL query.
     Tries PostgreSQL connection first; if offline, transparently falls back to local DuckDB.
     """
+    global _pg_localhost_offline
     t_start = time.time()
     t_limit = timeout_ms or settings.SQL_TIMEOUT_MS
     dsn = settings.DATABASE_URL_RO
 
-    # 1. Attempt PostgreSQL execution
-    try:
-        import psycopg2
-        from psycopg2.extras import RealDictCursor
-        
-        conn = psycopg2.connect(dsn, connect_timeout=1)
-        conn.set_session(readonly=True, autocommit=True)
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(f"SET statement_timeout = {t_limit};")
-            cur.execute(sql)
+    # 1. Attempt PostgreSQL execution (skip repeated localhost probes once known offline)
+    is_localhost_dsn = "localhost" in dsn or "127.0.0.1" in dsn
+    if not (is_localhost_dsn and _pg_localhost_offline):
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
             
-            records = cur.fetchall()
-            col_names = [desc[0] for desc in cur.description] if cur.description else []
-            columns = [{"name": c, "type": "text"} for c in col_names]
-            rows = [dict(r) for r in records]
-            
-            for row in rows:
-                for k, v in row.items():
-                    if hasattr(v, "isoformat"):
-                        row[k] = v.isoformat()
-                    elif hasattr(v, "__float__") and not isinstance(v, (int, float, bool)):
-                        row[k] = float(v)
+            conn = psycopg2.connect(dsn, connect_timeout=1)
+            conn.set_session(readonly=True, autocommit=True)
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"SET statement_timeout = {t_limit};")
+                cur.execute(sql)
+                
+                records = cur.fetchall()
+                col_names = [desc[0] for desc in cur.description] if cur.description else []
+                columns = [{"name": c, "type": "text"} for c in col_names]
+                rows = [dict(r) for r in records]
+                
+                for row in rows:
+                    for k, v in row.items():
+                        if hasattr(v, "isoformat"):
+                            row[k] = v.isoformat()
+                        elif hasattr(v, "__float__") and not isinstance(v, (int, float, bool)):
+                            row[k] = float(v)
 
-            dur_ms = round((time.time() - t_start) * 1000, 2)
-            conn.close()
-            return QueryExecutionResult(
-                success=True,
-                columns=columns,
-                rows=rows,
-                row_count=len(rows),
-                execution_time_ms=dur_ms
-            )
-    except Exception:
-        # Fall through to DuckDB local engine
-        pass
+                dur_ms = round((time.time() - t_start) * 1000, 2)
+                conn.close()
+                return QueryExecutionResult(
+                    success=True,
+                    columns=columns,
+                    rows=rows,
+                    row_count=len(rows),
+                    execution_time_ms=dur_ms
+                )
+        except Exception:
+            if is_localhost_dsn:
+                _pg_localhost_offline = True
 
     # 2. Local Embedded DuckDB Fallback
     try:

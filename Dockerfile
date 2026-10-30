@@ -1,6 +1,7 @@
 # ==============================================================================
-# Production Multi-Stage Dockerfile for Railway & Cloud Deployments
-# Builds the Vite React Frontend and serves via Python FastAPI in a single container
+# Production Multi-Stage Dockerfile for Render, Railway & Cloud Deployments
+# Builds the Vite React Frontend, pre-seeds the analytical DuckDB engine,
+# and serves full-stack via Python FastAPI in a single container.
 # ==============================================================================
 
 # Stage 1: Build Frontend SPA
@@ -13,7 +14,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Python FastAPI Backend with Pre-Calculated Semantic Views & Embedded UI
+# Stage 2: Python FastAPI Backend with Pre-Built Analytical Database & Embedded UI
 FROM python:3.11-slim
 WORKDIR /app
 
@@ -30,7 +31,18 @@ COPY backend/ /app/backend/
 COPY db/ /app/db/
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
+# Pre-build embedded analytical database (ey_bi.duckdb) at image build time for instant 0ms cold start
+RUN python3 -c "\
+import duckdb; \
+con = duckdb.connect('/app/ey_bi.duckdb'); \
+con.execute(open('/app/db/01_schema.sql').read().replace('NUMERIC(14, 2)', 'DOUBLE').replace('ON DELETE CASCADE', '')); \
+con.execute(open('/app/db/seed/seed_data.sql').read()); \
+con.execute(open('/app/db/02_views.sql').read().replace('::numeric', '::DOUBLE')); \
+con.close(); \
+print('Pre-seeded ey_bi.duckdb successfully!')"
+
 ENV PYTHONPATH=/app
+ENV DUCKDB_PATH=/app/ey_bi.duckdb
 ENV PORT=8000
 
 EXPOSE 8000
