@@ -4,7 +4,7 @@ Provides pluggable factory for Gemini and Azure OpenAI with automatic Langfuse c
 """
 
 import os
-from typing import Optional, Any
+from typing import Optional, Any, Dict, List
 from backend.app.core.config import settings
 
 
