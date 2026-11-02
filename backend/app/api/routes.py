@@ -250,7 +250,7 @@ def submit_feedback(req: FeedbackRequest):
     return {"status": "recorded", "score": req.score, "promoted_to_vector_store": promoted}
 
 
-@router.get("/health")
+@router.api_route("/health", methods=["GET", "HEAD"])
 def healthcheck():
     """Service health status including database readiness and log rotation diagnostics."""
     from backend.app.stores.pg_executor import execute_readonly_sql
