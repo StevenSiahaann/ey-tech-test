@@ -6,7 +6,15 @@ Supports bilingual output ('id' and 'en').
 """
 
 from typing import Dict, Any, List, Optional
-from backend.app.agent.state import AgentState, AgentResponse, KPICard, TableData, ChartConfig, QueryPlan
+from backend.app.agent.state import (
+    AgentState,
+    AgentResponse,
+    KPICard,
+    TableData,
+    ChartConfig,
+    QueryPlan,
+    ClarificationPayload,
+)
 
 
 def format_idr(value: float, lang: str = "id") -> str:
@@ -780,3 +788,338 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
         trace={"plan": plan.model_dump(), "row_count": len(rows)}
     )
     return {"final_response": resp, "current_step": "Synthesized Grounded Final Answer"}
+
+
+def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
+    """
+    ConversationalAdvisorSpecialist Node:
+    Synthesizes an executive, context-grounded analytical discussion, metric definition/formula
+    explanation, benchmark evaluation, or strategic recommendation without re-running a redundant
+    SQL query. Preserves full awareness of the previous turn's numbers and provides clickable
+    follow-up drill-down options.
+    """
+    import json
+    import re
+    from backend.app.core.llm_factory import get_llm
+
+    plan: QueryPlan = state.get("plan") or QueryPlan(intent="discussion")
+    user_msg = (state.get("user_message") or "").strip()
+    msg_lower = user_msg.lower()
+    lang = state.get("language") if state.get("language") in ("id", "en") else "id"
+    is_en = lang == "en"
+
+    prev_digest = state.get("prev_result_digest") or {}
+    last_rows: List[Dict[str, Any]] = prev_digest.get("last_rows_sample") or []
+    first_row = last_rows[0] if last_rows else {}
+
+    active_metrics = list(plan.metrics) if plan.metrics else []
+    win_label = plan.time_window_label or ("MTD" if is_en else "Bulan Ini (MTD)")
+    filter_desc = _describe_active_filters(plan, lang)
+    scope_txt = f" ({filter_desc})" if filter_desc else ""
+
+    summary = ""
+    insights: List[str] = []
+    recommendations: List[str] = []
+    follow_up_options: List[Dict[str, str]] = []
+
+    asks_gmv_vs_rev = (
+        ("gmv" in msg_lower and "revenue" in msg_lower)
+        or bool(re.search(r'\b(?:bedanya|perbedaan|difference\s+between)\b', msg_lower) and ("gmv" in msg_lower or "revenue" in msg_lower or "margin" in msg_lower))
+        or any(k in msg_lower for k in ["apa itu gmv", "artinya gmv", "maksudnya gmv", "apa itu margin", "artinya margin", "apa itu revenue", "artinya revenue", "apa itu cogs", "artinya cogs"])
+    )
+
+    # CASE 1: Discussion about Cancel Rate (e.g. "ini berarti apa artinya cancel rate?", "7.13% bagus atau jelek?")
+    if not asks_gmv_vs_rev and ("cancel_rate" in active_metrics or "cancel" in msg_lower or "batal" in msg_lower):
+        cr_val = first_row.get("cancel_rate_pct")
+        canc_cnt = first_row.get("cancelled_orders")
+        tot_cnt = first_row.get("total_orders")
+
+        if cr_val is not None and canc_cnt is not None and tot_cnt is not None:
+            cr_float = float(cr_val)
+            canc_int = int(canc_cnt)
+            tot_int = int(tot_cnt)
+            proceed_int = max(0, tot_int - canc_int)
+            proceed_pct = round(100.0 - cr_float, 2)
+            status_eval_id = "masih berada di bawah ambang batas risiko ritel (10,0%), sehingga tergolong terkendali" if cr_float < 10.0 else "melampaui ambang batas risiko ritel (10,0%), sehingga memerlukan intervensi operasional segera"
+            status_eval_en = "remains below the 10.0% retail risk threshold (operationally healthy)" if cr_float < 10.0 else "exceeds the 10.0% retail risk threshold (requiring immediate operational review)"
+
+            summary = (
+                f"A Cancel Rate of {cr_float:.2f}% in {win_label}{scope_txt} means that out of {tot_int:,} total orders placed, "
+                f"{canc_int:,} orders were cancelled (status = 'Cancelled'), while the remaining {proceed_int:,} orders ({proceed_pct:.2f}%) proceeded normally."
+                if is_en else
+                f"Cancel Rate (Tingkat Pembatalan Pesanan) sebesar {cr_float:.2f}% pada periode {win_label}{scope_txt} berarti dari total {tot_int:,} pesanan yang masuk, "
+                f"terdapat {canc_int:,} pesanan yang dibatalkan (status = 'Cancelled'), sedangkan {proceed_int:,} pesanan lainnya ({proceed_pct:.2f}%) berhasil diproses."
+            )
+            insights = (
+                [
+                    f"Formula & Semantic Definition: Cancel Rate is calculated as COUNT(orders with status = 'Cancelled') / COUNT(all orders) × 100 from `v_orders` ({canc_int:,} / {tot_int:,} = {cr_float:.2f}%).",
+                    f"Benchmark Evaluation: At {cr_float:.2f}%, your cancellation rate {status_eval_en}.",
+                    f"Financial Impact (GMV vs Net Revenue): The transaction value of the {canc_int:,} cancelled orders is still included in Gross Merchandise Value (GMV), but is strictly excluded from Net Revenue and Gross Margin."
+                ]
+                if is_en else
+                [
+                    f"Definisi & Rumus Perhitungan: Cancel Rate dihitung dengan rumus COUNT(pesanan berstatus 'Cancelled') / COUNT(seluruh pesanan) × 100 pada tabel `v_orders` ({canc_int:,} / {tot_int:,} = {cr_float:.2f}%).",
+                    f"Evaluasi Kesehatan Operasional: Pada angka {cr_float:.2f}%, tingkat pembatalan Anda {status_eval_id}.",
+                    f"Dampak Finansial (GMV vs Net Revenue): Nilai transaksi dari {canc_int:,} pesanan yang batal tersebut masih tercatat di dalam GMV (nilai transaksi kotor), namun otomatis dikeluarkan dari perhitungan Net Revenue dan Gross Margin."
+                ]
+            )
+        else:
+            summary = (
+                "Cancel Rate measures the percentage of customer orders that are cancelled before completion relative to total orders placed."
+                if is_en else
+                "Cancel Rate (Tingkat Pembatalan Pesanan) adalah metrik operasional yang mengukur persentase pesanan pelanggan yang berakhir dibatalkan (status = 'Cancelled') dibandingkan dengan total seluruh pesanan yang masuk."
+            )
+            insights = (
+                [
+                    "Formula & Data Source: Calculated from `v_orders` as `COUNT(CASE WHEN status = 'Cancelled' THEN 1 END) * 100.0 / COUNT(*)`.",
+                    "Retail Benchmark: In omnichannel retail, a Cancel Rate below 10.0% is considered normal/controlled, while >10.0% indicates stock-out or payment gateway friction.",
+                    "Accounting Impact: Cancelled orders are included in GMV (Gross Merchandise Value) but excluded from Net Revenue and Gross Margin."
+                ]
+                if is_en else
+                [
+                    "Rumus & Sumber Data: Dihitung dari view `v_orders` dengan formula `COUNT(status = 'Cancelled') / COUNT(total pesanan) × 100`.",
+                    "Benchmark Industri Ritel: Pada ritel omnichannel, Cancel Rate di bawah 10,0% tergolong terkendali/sehat, sedangkan di atas 10,0% menandakan adanya friksi stok atau kendala pembayaran.",
+                    "Dampak Akuntansi: Pesanan berstatus 'Cancelled' tetap dihitung dalam GMV (Gross Merchandise Value), tetapi tidak diakui sebagai Net Revenue maupun Gross Margin."
+                ]
+            )
+
+        recommendations = (
+            [
+                "Channel & City Isolation: Break down the Cancel Rate by sales channel (POS, Marketplace, Web) or by city to pinpoint where cancellations concentrate.",
+                "Inventory Sync & Payment SLA Audit: High marketplace/web cancellations typically stem from delayed stock synchronization or expired payment windows."
+            ]
+            if is_en else
+            [
+                "Isolasi per Channel & Kota: Lakukan breakdown Cancel Rate berdasarkan channel penjualan (POS, Marketplace, Web) atau per kota untuk menemukan sumber pembatalan tertinggi.",
+                "Audit Sinkronisasi Stok & Pembayaran: Pembatalan pesanan pada kanal digital umumnya dipicu oleh selisih stok gudang (stock-out pasca checkout) atau batas waktu pembayaran yang kedaluwarsa."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "Breakdown Cancel Rate by Channel (This Month)", "value": "Cancel rate by channel this month?"},
+                {"label": "Breakdown Cancel Rate by Region (This Month)", "value": "Cancel rate by region this month?"},
+                {"label": "Compare GMV vs Net Revenue (This Month)", "value": "Compare GMV and revenue this month?"}
+            ]
+            if is_en else
+            [
+                {"label": "Breakdown Cancel Rate per Channel Bulan Ini", "value": "Breakdown cancel rate per channel bulan ini?"},
+                {"label": "Breakdown Cancel Rate per Region Bulan Ini", "value": "Breakdown cancel rate per region bulan ini?"},
+                {"label": "Bandingkan GMV vs Net Revenue Bulan Ini", "value": "Bandingkan GMV dan revenue bulan ini?"}
+            ]
+        )
+
+    # CASE 2: Conceptual Comparison (GMV vs Net Revenue vs Gross Margin)
+    elif asks_gmv_vs_rev or any(k in msg_lower for k in ["apa itu gmv", "artinya gmv", "maksudnya gmv", "apa itu margin", "artinya margin", "apa itu revenue", "artinya revenue", "apa itu cogs", "artinya cogs"]):
+        summary = (
+            "In our enterprise retail semantic layer, GMV, Net Revenue, COGS, and Gross Margin represent distinct stages of transaction realization."
+            if is_en else
+            "Dalam standar akuntansi analitik ritel pada sistem ini, GMV, Net Revenue, COGS, dan Gross Margin merepresentasikan tahapan realisasi nilai transaksi yang berbeda."
+        )
+        insights = (
+            [
+                "GMV (Gross Merchandise Value): Calculated as `Σ(qty × unit_price − discount)` across ALL order statuses (`Completed`, `Cancelled`, and `Returned`). It reflects gross demand volume.",
+                "Net Revenue (Realized Sales): Uses the same line-item formula `Σ(qty × unit_price − discount)` but STRICTLY filters for `status = 'Completed'`. Cancelled and returned orders are excluded.",
+                "COGS & Gross Margin: `COGS = Σ(qty × unit_cost)` and `Gross Margin = Net Revenue − COGS` (strictly for `status = 'Completed'`), measuring true net profitability."
+            ]
+            if is_en else
+            [
+                "GMV (Gross Merchandise Value): Dihitung dengan rumus `Σ(qty × unit_price − discount)` mencakup SELURUH status pesanan (`Completed`, `Cancelled`, dan `Returned`). GMV mencerminkan total nilai permintaan kotor.",
+                "Net Revenue (Pendapatan Bersih Terealisasi): Menggunakan rumus item yang sama namun HANYA menghitung pesanan berstatus `Completed` (tidak termasuk pesanan batal atau retur).",
+                "COGS & Gross Margin: `COGS (HPP) = Σ(qty × unit_cost)` dan `Gross Margin = Net Revenue − COGS` (khusus status `Completed`), yang mengukur tingkat keuntungan bersih riil."
+            ]
+        )
+        recommendations = (
+            [
+                "Monitor the GMV-to-Revenue Gap: A widening gap between GMV and Net Revenue signals rising cancellations or returns.",
+                "Evaluate Categories by Margin %: Pair Net Revenue with Gross Margin % when reviewing product categories (such as FMCG vs Electronics)."
+            ]
+            if is_en else
+            [
+                "Pantau Selisih GMV terhadap Net Revenue: Semakin lebar selisih antara GMV dan Net Revenue menandakan tingginya pesanan yang batal (`Cancelled`) atau diretur (`Returned`).",
+                "Evaluasi Kategori Berdasarkan Margin %: Gunakan kombinasi Net Revenue dan Gross Margin saat mengevaluasi performa kategori (seperti FMCG vs Electronics)."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "MTD GMV for Java Region", "value": "MTD GMV for Java region?"},
+                {"label": "MTD Revenue & Margin for FMCG in Java", "value": "MTD Revenue and margin for FMCG in Java?"},
+                {"label": "Cancel Rate This Month", "value": "Cancel rate this month?"}
+            ]
+            if is_en else
+            [
+                {"label": "Cek GMV MTD Region Jawa", "value": "GMV MTD untuk region Jawa?"},
+                {"label": "Cek Revenue & Margin FMCG di Jawa (MTD)", "value": "Revenue dan margin MTD untuk FMCG di Jawa?"},
+                {"label": "Cek Cancel Rate Bulan Ini", "value": "Cancel rate bulan ini?"}
+            ]
+        )
+
+    # CASE 3: Contextual Discussion / Strategy / Interpretation of Previous Data Turn
+    elif last_rows:
+        # Summarize the key figures from `last_rows` and optionally enrich via LLM
+        top_keys = list(first_row.keys())
+        rev_val = first_row.get("total_revenue")
+        gmv_val = first_row.get("total_gmv")
+        mar_val = first_row.get("total_margin")
+        entity_name = (
+            first_row.get("product_name")
+            or first_row.get("store_name")
+            or first_row.get("store_city")
+            or first_row.get("channel")
+            or first_row.get("customer_segment")
+            or first_row.get("product_category")
+            or first_row.get("store_region")
+        )
+
+        if entity_name and rev_val is not None:
+            total_rev_all = sum(float(r.get("total_revenue") or 0.0) for r in last_rows)
+            top_rev = float(rev_val)
+            share_pct = (top_rev / total_rev_all * 100.0) if total_rev_all > 0 else 100.0
+            summary = (
+                f"Based on the previous analysis for {win_label}{scope_txt}, '{entity_name}' leads with {format_idr(top_rev, lang)} "
+                f"({share_pct:.1f}% of the {format_idr(total_rev_all, lang)} total across {len(last_rows)} analyzed groups)."
+                if is_en else
+                f"Berdasarkan hasil analisis periode {win_label}{scope_txt} sebelumnya, '{entity_name}' merupakan kontributor tertinggi dengan nilai {format_idr(top_rev, lang)} "
+                f"({share_pct:.1f}% dari total {format_idr(total_rev_all, lang)} pada {len(last_rows)} kelompok yang dianalisis)."
+            )
+            insights = (
+                [
+                    f"Primary Driver Concentration: '{entity_name}' accounts for {share_pct:.1f}% of total realized revenue in the selected view, making it the core anchor of performance.",
+                    "Revenue Realization Rule: All figures in this breakdown strictly reflect completed transactions (`status = 'Completed'`), ensuring zero inflation from cancelled orders.",
+                    f"Portfolio Distribution: Across the {len(last_rows)} rows analyzed, performance can be further segmented by city, channel, or product category to identify growth pockets."
+                ]
+                if is_en else
+                [
+                    f"Konsentrasi Kontributor Utama: '{entity_name}' menyumbang {share_pct:.1f}% dari total revenue pada cakupan ini, menjadikannya penopang utama kinerja.",
+                    "Validitas Pendapatan Bersih: Seluruh angka pada hasil ini hanya memperhitungkan transaksi yang telah selesai (`status = 'Completed'`), bebas dari distorsi pesanan batal.",
+                    f"Distribusi Portofolio: Dari {len(last_rows)} baris hasil analisis, Anda dapat melakukan pembedahan lanjutan per kota, channel, atau kategori produk untuk melihat potensi pertumbuhan."
+                ]
+            )
+        elif gmv_val is not None or rev_val is not None:
+            val_num = float(rev_val if rev_val is not None else gmv_val)
+            m_lbl = "Net Revenue" if rev_val is not None else "GMV"
+            summary = (
+                f"The {m_lbl} figure of {format_idr(val_num, lang)} for {win_label}{scope_txt} represents the aggregate transaction value recorded during the evaluated period."
+                if is_en else
+                f"Angka {m_lbl} sebesar {format_idr(val_num, lang)} pada periode {win_label}{scope_txt} merepresentasikan akumulasi nilai transaksi yang tercatat selama periode tersebut."
+            )
+            if mar_val is not None and rev_val:
+                m_pct = (float(mar_val) / float(rev_val) * 100.0) if float(rev_val) > 0 else 0.0
+                insights.append(
+                    f"Profitability Ratio: With Gross Margin at {format_idr(float(mar_val), lang)} ({m_pct:.1f}% of Net Revenue), cost of goods sold (COGS) consumed {100.0 - m_pct:.1f}% of revenue."
+                    if is_en else
+                    f"Rasio Profitabilitas: Dengan Gross Margin sebesar {format_idr(float(mar_val), lang)} ({m_pct:.1f}% dari Net Revenue), porsi Harga Pokok Penjualan (COGS) adalah {100.0 - m_pct:.1f}%."
+                )
+            insights.append(
+                f"Evaluation Scope: Figures are calculated over {win_label} ({plan.start_date} to {plan.end_date}){scope_txt}."
+                if is_en else
+                f"Cakupan Evaluasi: Data dihitung untuk rentang waktu {win_label} ({plan.start_date} s.d. {plan.end_date}){scope_txt}."
+            )
+        else:
+            summary = (
+                f"From the previous analysis ({ len(last_rows) } rows returned), the data provides a baseline view of your retail operations."
+                if is_en else
+                f"Berdasarkan hasil data sebelumnya ({len(last_rows)} baris), informasi tersebut memberikan gambaran struktural atas operasional ritel Anda."
+            )
+            insights = [
+                f"Columns analyzed: {', '.join(top_keys)}." if is_en else f"Kolom yang dianalisis: {', '.join(top_keys)}."
+            ]
+
+        recommendations = (
+            [
+                "Granular Drill-Down: Break down the current figure by city (`store_city`) or sales channel (`POS`, `Marketplace`, `Web`) to isolate top-performing branches.",
+                "Margin & Assortment Optimization: Focus promotional bundles on high-margin categories and protect stock availability on top-selling SKUs."
+            ]
+            if is_en else
+            [
+                "Pembedahan Granular (Drill-Down): Lakukan breakdown dari hasil di atas berdasarkan kota (`per city`) atau channel penjualan (`POS`, `Marketplace`, `Web`) untuk mengidentifikasi cabang terbaik.",
+                "Optimasi Margin & Ketersediaan Produk: Fokuskan promosi bundling pada kategori bermargin tinggi dan jaga ketersediaan stok (safety stock) pada produk terlaris."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "Breakdown by City", "value": "Breakdown per city"},
+                {"label": "Breakdown by Sales Channel", "value": "Breakdown per channel"},
+                {"label": "Top 5 Products by Revenue", "value": "Top 5 products by revenue last month?"}
+            ]
+            if is_en else
+            [
+                {"label": "Breakdown per Kota", "value": "Breakdown per city"},
+                {"label": "Breakdown per Channel Penjualan", "value": "Breakdown per channel"},
+                {"label": "Lihat Top 5 Produk Revenue Tertinggi", "value": "Top 5 produk berdasarkan revenue bulan lalu?"}
+            ]
+        )
+
+    # CASE 4: General Advisory / Open Discussion without Prior Turn Rows
+    else:
+        summary = (
+            "As your Enterprise Conversational BI Advisor, I can help you both analyze live database metrics and interpret their business meaning, formulas, and strategic implications."
+            if is_en else
+            "Sebagai Konsultan & Asisten Conversational BI Anda, saya dapat membantu mengeksekusi data transaksi sekaligus mendiskusikan arti metrik, rumus perhitungan, evaluasi performa, hingga strategi bisnis."
+        )
+        insights = (
+            [
+                "Core Financial Metrics Available: GMV (all order statuses), Net Revenue (`status = 'Completed'`), COGS (`qty × unit_cost`), Gross Margin (`Revenue − COGS`), and Cancel Rate (`Cancelled / Total Orders`).",
+                "Catalog Coverage: 28 distinct products across 5 categories (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`), sold across `POS`, `Marketplace`, and `Web` channels.",
+                "Interactive Multi-Turn Context: After running any data query, you can ask 'What does this number mean?', 'Is this good or bad?', or 'What strategy should we take?'."
+            ]
+            if is_en else
+            [
+                "Metrik Finansial Utama: GMV (seluruh status pesanan), Net Revenue (khusus `status = 'Completed'`), COGS (`qty × unit_cost`), Gross Margin (`Revenue − COGS`), serta Cancel Rate (`Cancelled / Total Pesanan`).",
+                "Cakupan Katalog & Kanal: Mencakup 28 produk pada 5 kategori (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`) di kanal `POS`, `Marketplace`, dan `Web`.",
+                "Diskusi Multi-Turn Interaktif: Setelah menjalankan kueri data apa pun, Anda dapat berdiskusi seperti 'Apa artinya angka ini?', 'Apakah angka ini bagus atau bahaya?', atau 'Strategi apa yang harus dilakukan?'."
+            ]
+        )
+        recommendations = (
+            [
+                "Start with a Headline KPI: Run one of the baseline queries below, then ask follow-up questions to drill down or discuss strategy."
+            ]
+            if is_en else
+            [
+                "Mulai dari Indikator Utama: Jalankan salah satu analisis dasar di bawah ini, lalu ajukan pertanyaan diskusi atau breakdown lanjutan."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "Cancel Rate This Month", "value": "Cancel rate this month?"},
+                {"label": "MTD Revenue & Margin for FMCG in Java", "value": "MTD Revenue and margin for FMCG in Java?"},
+                {"label": "Top 5 Products by Revenue Last Month", "value": "Top 5 products by revenue last month?"}
+            ]
+            if is_en else
+            [
+                {"label": "Cek Cancel Rate Bulan Ini", "value": "Cancel rate bulan ini?"},
+                {"label": "Revenue & Margin FMCG di Jawa (MTD)", "value": "Revenue dan margin MTD untuk FMCG di Jawa?"},
+                {"label": "Top 5 Produk Revenue Tertinggi Bulan Lalu", "value": "Top 5 produk berdasarkan revenue bulan lalu?"}
+            ]
+        )
+
+    assumptions = [
+        (
+            "Conversational Advisory Mode: Explaining metric definitions, business context, and strategic actions based on verified session data and semantic governance rules."
+            if is_en else
+            "Mode Diskusi & Konsultasi Analitik: Menjelaskan arti metrik, evaluasi benchmark bisnis, dan rekomendasi strategis berdasarkan konteks data sesi aktif."
+        )
+    ]
+
+    resp = AgentResponse(
+        type="discussion",
+        language=lang,
+        summary=summary,
+        kpis=[],
+        table=None,
+        chart=ChartConfig(type="none"),
+        insights=insights[:4],
+        recommendations=recommendations[:3],
+        sql=None,
+        assumptions=assumptions,
+        clarification=ClarificationPayload(
+            question=(
+                "Continue exploring with one of these analytical drill-downs:"
+                if is_en else
+                "Lanjutkan diskusi atau eksplorasi data dengan memilih salah satu analisis berikut:"
+            ),
+            options=follow_up_options,
+        ),
+        trace={"plan": plan.model_dump(), "row_count": len(last_rows)},
+    )
+    return {"final_response": resp, "current_step": "Synthesized Conversational Advisory Response"}
+

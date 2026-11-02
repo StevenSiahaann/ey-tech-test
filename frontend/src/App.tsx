@@ -295,15 +295,22 @@ interface AgentMessageCardProps {
   t: typeof TRANSLATIONS['id'];
   onExportCsv: () => void;
   onExportHtml: () => void;
+  onSelectOption?: (queryText: string) => void;
 }
 
-const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, lang, t, onExportCsv, onExportHtml }) => {
+const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, lang, t, onExportCsv, onExportHtml, onSelectOption }) => {
   const [activeTab, setActiveTab] = useState<'table' | 'sql'>('table');
   const [isThinkingExpanded, setIsThinkingExpanded] = useState<boolean>(false);
   const [isTableExpanded, setIsTableExpanded] = useState<boolean>(false);
 
   const res = turn.agentResponse;
   if (!res) return null;
+
+  const isConversationalCard =
+    res.type === 'discussion' ||
+    res.type === 'clarification' ||
+    res.type === 'refusal' ||
+    ((!res.kpis || res.kpis.length === 0) && (!res.table?.rows || res.table.rows.length === 0));
 
   const displaySteps = (turn.steps && turn.steps.length > 0)
     ? turn.steps
@@ -434,55 +441,79 @@ const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, lang, t, onEx
 
       {/* 2. Main Card Content (Soft, Modernized EY Style) */}
       <div className="bg-white border border-[#e5e7eb] border-t-3 border-t-[#ffe600] rounded-xl shadow-xs hover:shadow-sm transition-shadow w-full overflow-hidden">
-        {/* Header / Metric Section */}
+        {/* Header / Metric or Conversational Section */}
         <div className="p-5 md:p-6 border-b border-[#e5e7eb] flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white">
-          <div>
-            <h3 className="text-[22px] md:text-[28px] font-bold text-[#2e2e38] leading-tight mb-1">
-              {metricDisplay}
-            </h3>
-            <p className="text-[12px] md:text-[13px] text-gray-500 font-medium">
-              {metricLabel}
-            </p>
-            {secondaryKpis.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-3">
-                {secondaryKpis.map((kpi, kIdx) => (
-                  <div key={kIdx} className="bg-[#f8f9fa] border border-[#e5e7eb] rounded-md px-3 py-1 text-[12px] text-[#2e2e38]">
-                    <span className="text-gray-500 font-medium">{kpi.label}: </span>
-                    <span className="font-semibold font-mono">
-                      {kpi.format === 'currency_idr' && typeof kpi.value === 'number'
-                        ? formatCurrency(kpi.value, lang)
-                        : String(kpi.value)}
-                    </span>
-                  </div>
-                ))}
+          <div className="flex-1">
+            {isConversationalCard ? (
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#fffdf0] border border-[#f0e08a] text-[#2e2e38] text-[11.5px] font-semibold mb-2.5">
+                  <Sparkles size={13} className="text-[#2e2e38]" />
+                  <span>
+                    {res.type === 'discussion'
+                      ? (lang === 'en' ? 'Analytical Discussion & Advisory' : 'Diskusi & Konsultasi Analitik')
+                      : res.type === 'clarification'
+                      ? (lang === 'en' ? 'Proactive Parameter Confirmation' : 'Konfirmasi Parameter Analisis')
+                      : res.type === 'refusal'
+                      ? (lang === 'en' ? 'Domain Scope Guardrail' : 'Batas Cakupan Analitik')
+                      : metricLabel}
+                  </span>
+                </div>
+                <p className="text-[15.5px] md:text-[16.5px] font-semibold text-[#2e2e38] leading-relaxed">
+                  {res.summary}
+                </p>
               </div>
+            ) : (
+              <>
+                <h3 className="text-[22px] md:text-[28px] font-bold text-[#2e2e38] leading-tight mb-1">
+                  {metricDisplay}
+                </h3>
+                <p className="text-[12px] md:text-[13px] text-gray-500 font-medium">
+                  {metricLabel}
+                </p>
+                {secondaryKpis.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {secondaryKpis.map((kpi, kIdx) => (
+                      <div key={kIdx} className="bg-[#f8f9fa] border border-[#e5e7eb] rounded-md px-3 py-1 text-[12px] text-[#2e2e38]">
+                        <span className="text-gray-500 font-medium">{kpi.label}: </span>
+                        <span className="font-semibold font-mono">
+                          {kpi.format === 'currency_idr' && typeof kpi.value === 'number'
+                            ? formatCurrency(kpi.value, lang)
+                            : String(kpi.value)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
 
-          <div className="flex bg-[#f3f4f6] p-1 rounded-lg border border-[#e5e7eb] w-full md:w-auto">
-            <button
-              onClick={() => setActiveTab('table')}
-              className={`flex-1 md:flex-none px-3.5 py-1.5 text-[12.5px] font-semibold rounded-md flex items-center justify-center md:justify-start gap-2 transition-colors cursor-pointer ${
-                activeTab === 'table' ? 'bg-white text-[#2e2e38] shadow-xs' : 'text-gray-600 hover:text-[#2e2e38]'
-              }`}
-            >
-              <TableIcon size={15} />
-              <span>{t.dataTab}</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('sql')}
-              className={`flex-1 md:flex-none px-3.5 py-1.5 text-[12.5px] font-semibold rounded-md flex items-center justify-center md:justify-start gap-2 transition-colors cursor-pointer ${
-                activeTab === 'sql' ? 'bg-white text-[#2e2e38] shadow-xs' : 'text-gray-600 hover:text-[#2e2e38]'
-              }`}
-            >
-              <TerminalSquare size={15} />
-              <span>{t.sqlTab}</span>
-            </button>
-          </div>
+          {(!isConversationalCard || res.sql || tableRows.length > 0) && (
+            <div className="flex bg-[#f3f4f6] p-1 rounded-lg border border-[#e5e7eb] w-full md:w-auto shrink-0">
+              <button
+                onClick={() => setActiveTab('table')}
+                className={`flex-1 md:flex-none px-3.5 py-1.5 text-[12.5px] font-semibold rounded-md flex items-center justify-center md:justify-start gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'table' ? 'bg-white text-[#2e2e38] shadow-xs' : 'text-gray-600 hover:text-[#2e2e38]'
+                }`}
+              >
+                <TableIcon size={15} />
+                <span>{t.dataTab}</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('sql')}
+                className={`flex-1 md:flex-none px-3.5 py-1.5 text-[12.5px] font-semibold rounded-md flex items-center justify-center md:justify-start gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'sql' ? 'bg-white text-[#2e2e38] shadow-xs' : 'text-gray-600 hover:text-[#2e2e38]'
+                }`}
+              >
+                <TerminalSquare size={15} />
+                <span>{t.sqlTab}</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Tab Content */}
-        <div className="p-0 bg-white min-h-[180px] w-full">
+        <div className="p-0 bg-white w-full">
           {activeTab === 'table' && (
             <div className="overflow-x-auto w-full">
               {/* Auto-Chart Visualizer (Only when comparing 2 or more entities) */}
@@ -566,6 +597,31 @@ const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, lang, t, onEx
                 </div>
               )}
 
+              {/* Interactive Clarification & Follow-Up Action Chips */}
+              {res.clarification?.options && res.clarification.options.length > 0 && (
+                <div className="p-5 md:p-6 border-b border-[#e5e7eb] bg-white">
+                  {res.clarification.question && (
+                    <div className="text-[12.5px] font-semibold text-gray-600 mb-3 flex items-center gap-2">
+                      <MessageSquare size={14} className="text-[#2e2e38]" />
+                      <span>{res.clarification.question}</span>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2.5">
+                    {res.clarification.options.map((opt, oIdx) => (
+                      <button
+                        key={oIdx}
+                        type="button"
+                        onClick={() => onSelectOption && onSelectOption(opt.value)}
+                        className="flex items-center gap-2 px-3.5 py-2 rounded-lg border border-[#d1d5db] bg-[#fafafa] hover:bg-[#ffe600] hover:border-[#2e2e38] text-[#2e2e38] text-[13px] font-medium transition-all shadow-2xs cursor-pointer text-left"
+                      >
+                        <ArrowRight size={13} className="text-[#2e2e38] shrink-0" />
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Data Table */}
               {tableRows.length > 0 && (
                 <table className="w-full text-left border-collapse">
@@ -640,14 +696,16 @@ const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, lang, t, onEx
             </span>
           </div>
           <div className="flex flex-col sm:flex-row gap-2.5 w-full xl:w-auto shrink-0">
-            <button
-              onClick={onExportCsv}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-3.5 py-2 border border-gray-300 bg-white hover:bg-gray-50 text-[#2e2e38] transition-colors text-[12.5px] font-semibold rounded-md shadow-2xs cursor-pointer"
-              title={t.downloadCsvTitle}
-            >
-              <Download size={15} />
-              <span>{t.downloadCsv}</span>
-            </button>
+            {tableRows.length > 0 && (
+              <button
+                onClick={onExportCsv}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-3.5 py-2 border border-gray-300 bg-white hover:bg-gray-50 text-[#2e2e38] transition-colors text-[12.5px] font-semibold rounded-md shadow-2xs cursor-pointer"
+                title={t.downloadCsvTitle}
+              >
+                <Download size={15} />
+                <span>{t.downloadCsv}</span>
+              </button>
+            )}
             <button
               onClick={onExportHtml}
               className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 border border-[#d6c100] bg-[#ffe600] hover:bg-[#ecd500] text-[#2e2e38] transition-colors text-[12.5px] font-semibold rounded-md shadow-2xs cursor-pointer"
@@ -1264,6 +1322,7 @@ export function App() {
                         turn={turn}
                         lang={lang}
                         t={t}
+                        onSelectOption={(q) => handleSendMessage(q)}
                         onExportCsv={() =>
                           exportToCsv(
                             turn.agentResponse?.table?.columns || [],

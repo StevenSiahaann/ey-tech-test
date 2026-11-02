@@ -150,6 +150,46 @@ class TestConversationalContext(unittest.TestCase):
         self.assertEqual(r_opt2.kpis[0].value, 5)
         self.assertEqual(r_opt2.kpis[1].value, 28)
 
+    def test_conversational_discussion_and_advisory_mode(self):
+        """
+        Tests ConversationalAdvisorSpecialist:
+        1. 'Cancel rate this month?' -> returns 7.13% data card
+        2. 'ini berarti apa artinya cancel rate?' -> engages in grounded discussion (7.13%, 203 cancelled out of 2,848)
+           without re-running redundant SQL, and provides clickable drill-down options.
+        3. 'Breakdown per channel' -> seamlessly resumes SQL drill-down using preserved session context.
+        4. 'apa bedanya GMV sama Net Revenue?' -> explains conceptual difference between GMV, Net Revenue, and Margin.
+        """
+        sid = "test-discussion-advisory-mode"
+        session_store.clear_session(sid)
+
+        # Turn 1: Data query
+        r1 = process_conversational_turn(sid, "Cancel rate this month?", language="en")
+        self.assertEqual(r1.type, "answer")
+        self.assertIsNotNone(r1.sql)
+
+        # Turn 2: Discussion question ('ini berarti apa artinya cancel rate?')
+        r2 = process_conversational_turn(sid, "ini berarti apa artinya cancel rate?", language="id")
+        self.assertEqual(r2.type, "discussion")
+        self.assertIsNone(r2.sql)
+        self.assertIn("7.13%", r2.summary)
+        self.assertIn("203", r2.summary)
+        self.assertTrue(len(r2.insights) >= 3)
+        self.assertTrue(len(r2.recommendations) >= 2)
+        self.assertIsNotNone(r2.clarification)
+        self.assertTrue(len(r2.clarification.options) >= 3)
+
+        # Turn 3: Follow-up data drill-down ('Breakdown per channel') preserves Turn 1 metric ('cancel_rate')
+        r3 = process_conversational_turn(sid, "Breakdown per channel", language="id")
+        self.assertEqual(r3.type, "answer")
+        self.assertIsNotNone(r3.sql)
+        self.assertIn("channel", r3.sql.lower())
+
+        # Turn 4: Conceptual comparison ('apa bedanya GMV sama Net Revenue?')
+        r4 = process_conversational_turn(sid, "apa bedanya GMV sama Net Revenue?", language="id")
+        self.assertEqual(r4.type, "discussion")
+        self.assertIn("GMV", r4.summary)
+        self.assertIn("Net Revenue", r4.summary)
+
 
 if __name__ == "__main__":
     unittest.main()

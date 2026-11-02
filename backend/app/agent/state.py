@@ -15,7 +15,7 @@ class FilterItem(BaseModel):
 
 
 class QueryPlan(BaseModel):
-    intent: Literal["metric_query", "ranking", "comparison", "breakdown", "trend", "anomaly", "exploratory", "llm_generated", "clarification_reply", "tiering", "out_of_scope"] = "metric_query"
+    intent: Literal["metric_query", "ranking", "comparison", "breakdown", "trend", "anomaly", "exploratory", "discussion", "llm_generated", "clarification_reply", "tiering", "out_of_scope"] = "metric_query"
     metrics: List[str] = Field(default_factory=list, description="List of metric names: gmv, revenue, cogs, margin, cancel_rate, order_count")
     dimensions: List[str] = Field(default_factory=list, description="Dimensions to group by: store_region, store_city, channel, product_category, product_name, customer_segment, order_date")
     filters: List[FilterItem] = Field(default_factory=list)
@@ -60,7 +60,7 @@ class ClarificationPayload(BaseModel):
 
 
 class AgentResponse(BaseModel):
-    type: Literal["answer", "clarification", "refusal", "error"] = "answer"
+    type: Literal["answer", "discussion", "clarification", "refusal", "error"] = "answer"
     language: str = "id"
     summary: str
     kpis: List[KPICard] = Field(default_factory=list)

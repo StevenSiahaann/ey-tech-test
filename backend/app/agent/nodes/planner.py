@@ -94,6 +94,8 @@ def _assign_specialist_agent(plan: QueryPlan) -> str:
     Commander Specialist Router:
     Assigns the specialized sub-agent responsible for executing the resolved QueryPlan.
     """
+    if plan.intent == "discussion":
+        return "ConversationalAdvisorSpecialist"
     if plan.intent in ("out_of_scope", "clarification_reply") or plan.needs_clarification:
         return "ClarificationGuardSpecialist"
     if plan.intent == "anomaly":
@@ -217,6 +219,54 @@ def _is_anaphoric_or_followup_query(msg_lower: str) -> bool:
     return False
 
 
+def _is_discussion_or_advisory_query(msg_lower: str) -> bool:
+    """
+    Detects whether the user is engaging in an analytical discussion, asking for metric
+    definitions/formulas/differences, interpreting the business meaning of previous results,
+    or asking for strategic recommendations rather than requesting a new SQL data table.
+    """
+    # Never intercept anomaly detection or explicit SQL breakdown/top-N commands
+    if re.search(r'\b(?:anomali|anomaly|drop\s*>\s*30%|top\s+\d+|breakdown\s+per|rincian\s+per)\b', msg_lower):
+        return False
+
+    # 1. Explicit Meaning / Definition / Formula / Conceptual Difference
+    if re.search(
+        r'\b(?:apa\s+artinya|artinya\s+apa|apa\s+maksud(?:nya)?|maksudnya\s+(?:apa|gimana|bagaimana)|'
+        r'ini\s+berarti\s+apa|berarti\s+apa|maksud\s+dari|apa\s+itu\s+(?:gmv|revenue|net\s+revenue|margin|gross\s+margin|cogs|hpp|cancel\s+rate)|'
+        r'definisi|pengertian|rumus(?:nya)?|cara\s+(?:hitung|menghitung|ngitung)|'
+        r'apa\s+bedanya|bedanya\s+apa|perbedaan(?:nya)?\s+(?:antara\s+)?|'
+        r'what\s+does\s+.*\s+mean|what\s+is\s+the\s+(?:meaning|definition|difference|formula)|'
+        r'how\s+is\s+.*\s+calculated|difference\s+between|meaning\s+of)\b',
+        msg_lower
+    ):
+        return True
+
+    # 2. Evaluative / Interpretive / Discussion of Results ("bagus atau jelek?", "apa kesimpulannya?", "jelaskan lebih detail")
+    if re.search(
+        r'\b(?:bagus\s+atau\s+(?:jelek|buruk|enggak|tidak)|apakah\s+(?:angka\s+)?(?:ini|itu|segitu)\s+(?:bagus|aman|normal|tinggi|rendah|bahaya|wajar|baik|buruk)|'
+        r'apa\s+(?:dampaknya|implikasinya|kesimpulannya)|kesimpulannya\s+apa|bisa\s+simpulkan|'
+        r'jelaskan\s+(?:lebih\s+detail|maksud|arti|hasil|kenapa)|kenapa\s+(?:angka\s+ini|itu|hal\s+ini)\s+penting|'
+        r'menurut\s+(?:kamu|anda)\s+(?:bagaimana|gimana)|is\s+(?:this|that|it)\s+(?:good|bad|normal|safe|high|low)|'
+        r'what\s+is\s+the\s+(?:impact|implication|takeaway|conclusion)|explain\s+(?:this|the\s+result|more))\b',
+        msg_lower
+    ):
+        return True
+
+    # 3. Strategic / Prescriptive / Action Recommendations ("strategi apa...", "saran kamu gimana supaya...")
+    if re.search(
+        r'\b(?:strategi\s+apa|apa\s+strateginya|saran\s+(?:kamu|anda|apa|bisnis)|rekomendasi(?:nya)?\s+apa|'
+        r'apa\s+rekomendasinya|apa\s+yang\s+harus\s+(?:kita\s+)?lakukan|langkah\s+apa\s+yang|'
+        r'solusinya\s+(?:apa|gimana|bagaimana)|gimana\s+cara\s+(?:menurunkan|menaikkan|meningkatkan|mengatasi|memperbaiki|menekan)|'
+        r'bagaimana\s+cara\s+(?:menurunkan|menaikkan|meningkatkan|mengatasi|memperbaiki|menekan)|'
+        r'how\s+(?:can|should|do)\s+we\s+(?:improve|reduce|increase|fix|lower)|'
+        r'what\s+(?:strategy|recommendations?|actions?)\s+(?:should|do\s+you))\b',
+        msg_lower
+    ):
+        return True
+
+    return False
+
+
 def plan_query(state: AgentState) -> Dict[str, Any]:
     """
     Semantic & Context-Aware Query Planner.
@@ -245,6 +295,28 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
 
     # 3. Extract Metrics & Base Intent
     extracted_metrics = _detect_metrics_and_intent(msg_lower, plan, is_explicit_time=tw.is_explicit, lang=lang)
+
+    # 3b. Conversational Discussion / Advisory Mode (ConversationalAdvisorSpecialist)
+    if _is_discussion_or_advisory_query(msg_lower):
+        plan.intent = "discussion"
+        if prev_plan_dict:
+            prev_plan_disc = QueryPlan(**prev_plan_dict) if isinstance(prev_plan_dict, dict) else prev_plan_dict
+            plan.is_follow_up = True
+            if not extracted_metrics and prev_plan_disc.metrics:
+                plan.metrics = list(prev_plan_disc.metrics)
+                plan.inherited_fields.append("metrics")
+            if not plan.dimensions and prev_plan_disc.dimensions:
+                plan.dimensions = list(prev_plan_disc.dimensions)
+                plan.inherited_fields.append("dimensions")
+            if not plan.filters and prev_plan_disc.filters:
+                plan.filters = list(prev_plan_disc.filters)
+                plan.inherited_fields.append("filters")
+            if not tw.is_explicit:
+                plan.start_date = prev_plan_disc.start_date
+                plan.end_date = prev_plan_disc.end_date
+                plan.time_window_label = prev_plan_disc.time_window_label
+                plan.inherited_fields.append("time_window")
+        return _finalize_commander_plan(msg, plan, lang, "Advisory & Analytical Discussion")
 
     # 4. Check for Genuine Conversational Context Chaining (Follow-Up)
     is_breakdown_followup = bool(re.search(

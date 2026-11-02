@@ -18,7 +18,7 @@ from backend.app.stores.vector_client import retrieve_few_shots
 from backend.app.agent.nodes.generator import generate_sql
 from backend.app.agent.nodes.validator import validate_sql_node
 from backend.app.agent.nodes.executor import execute_sql_node
-from backend.app.agent.nodes.synthesizer import synthesize_response
+from backend.app.agent.nodes.synthesizer import synthesize_response, synthesize_discussion_response
 
 
 def _extract_views_from_sql(sql: str) -> str:
@@ -47,10 +47,12 @@ def _retrieve_node(state: AgentState) -> Dict[str, Any]:
     }
 
 
-def _route_after_plan(state: AgentState) -> Literal["retrieve", "end_early"]:
+def _route_after_plan(state: AgentState) -> Literal["retrieve", "discuss", "end_early"]:
     plan_obj = state.get("plan")
     if not plan_obj or plan_obj.intent == "out_of_scope" or plan_obj.needs_clarification:
         return "end_early"
+    if plan_obj.intent == "discussion":
+        return "discuss"
     return "retrieve"
 
 
@@ -83,6 +85,7 @@ def build_agent_graph():
     workflow.add_node("validate_sql", validate_sql_node)
     workflow.add_node("execute_sql", execute_sql_node)
     workflow.add_node("synthesize", synthesize_response)
+    workflow.add_node("discuss", synthesize_discussion_response)
 
     workflow.set_entry_point("plan")
 
@@ -91,9 +94,11 @@ def build_agent_graph():
         _route_after_plan,
         {
             "retrieve": "retrieve",
+            "discuss": "discuss",
             "end_early": END,
         },
     )
+    workflow.add_edge("discuss", END)
     workflow.add_edge("retrieve", "generate_sql")
     workflow.add_edge("generate_sql", "validate_sql")
     workflow.add_conditional_edges(
@@ -405,6 +410,38 @@ def stream_conversational_turn(
             except Exception:
                 pass
         yield {"type": "answer", "payload": clarification_resp}
+        return
+
+    # Handle Conversational Discussion & Advisory Mode (ConversationalAdvisorSpecialist)
+    if plan_obj and plan_obj.intent == "discussion":
+        disc_out = synthesize_discussion_response(state)
+        state.update(disc_out)
+        disc_resp: AgentResponse = state["final_response"]
+        yield make_step(
+            "advisor_discussion",
+            "ConversationalAdvisorSpecialist: Analytical Discussion & Advisory",
+            "Menyusun penjelasan konseptual, interpretasi metrik, dan rekomendasi strategis berbasis konteks sesi",
+            f"Grounded in session context ({len(prev_digest.get('last_rows_sample') or [])} prior rows) | Bahasa: {disc_resp.language.upper()}",
+        )
+        disc_resp.trace["steps"] = steps_log
+        disc_resp.trace["total_duration_ms"] = round((time.time() - t_start) * 1000, 1)
+
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": disc_resp.summary})
+        save_data = {
+            "prev_plan": prev_plan if prev_plan else plan_obj.model_dump(),
+            "prev_result_digest": prev_digest,
+            "history": history[-10:],
+        }
+        session_store.save_session(session_id, save_data)
+
+        if lf_trace and lf_client:
+            try:
+                lf_trace.update(output={"discussion": disc_resp.summary}, level="DEFAULT")
+                lf_client.flush()
+            except Exception:
+                pass
+        yield {"type": "answer", "payload": disc_resp}
         return
 
     # Step 4: Hybrid Semantic Few-Shot Retrieval
