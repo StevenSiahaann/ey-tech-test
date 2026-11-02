@@ -318,6 +318,61 @@ def _is_discussion_or_advisory_query(msg_lower: str) -> bool:
     return False
 
 
+def classify_intent_with_llm(
+    msg: str,
+    prev_plan_dict: Optional[dict] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None
+) -> Optional[str]:
+    """
+    Enterprise LLM Intent Triage (Node 0 Gatekeeper):
+    Uses a fast zero-shot LLM classification call to categorize user messages into:
+    - 'ANALYTICS': Questions about retail transactions, sales, revenue, GMV, products, stores, margins, orders, channels, regions, anomalies, or follow-ups to prior data.
+    - 'IN_SCOPE_META': Greetings, system capabilities, bot persona ("kamu siapa"), metric definitions, formulas, or retail business advice.
+    - 'OUT_OF_SCOPE': General chitchat, weather, clock/time ("sekarang jam berapa"), politics, trivia, jokes, coding, or non-retail questions.
+    Returns: 'ANALYTICS' | 'IN_SCOPE_META' | 'OUT_OF_SCOPE' (or None if LLM is unavailable/fails, triggering deterministic fallback).
+    """
+    import json
+    from backend.app.core.llm_factory import get_llm
+
+    # Skip LLM triage for obvious fast-path pure greetings or short deictic tokens
+    m_clean = msg.strip().lower()
+    if m_clean in {"hi", "halo", "hey", "hello", "pagi", "siang", "sore", "malam"}:
+        return "IN_SCOPE_META"
+
+    has_prior_context = bool(prev_plan_dict)
+    prompt = (
+        "You are an Enterprise Intent Classifier for a Retail Conversational BI Agent.\n"
+        "Your task is to strictly classify the user's message into one of three categories:\n"
+        "1. \"ANALYTICS\": The user is asking for retail business data, performance metrics, store/product comparisons, aggregations, trends, or follow-ups to previous data (e.g. revenue, GMV, products, stores, sales channels, regions, margin, order counts, anomalies).\n"
+        "2. \"IN_SCOPE_META\": The user is greeting (\"hi\", \"halo\"), inquiring about bot identity/capabilities (\"kamu siapa?\", \"what can you do?\"), asking for metric definitions/formulas (\"apa itu GMV?\"), or seeking retail business advice.\n"
+        "3. \"OUT_OF_SCOPE\": General chitchat or questions outside retail analytics (e.g. clock/current time \"sekarang jam berapa\", weather, politics, recipes, poetry, trivia, general coding, personal chat).\n\n"
+        f"Prior turn active: {has_prior_context}\n"
+        f"User message: \"{msg}\"\n\n"
+        "Respond ONLY with a valid JSON object without markdown fences, with exactly this format:\n"
+        "{\"category\": \"ANALYTICS\" | \"IN_SCOPE_META\" | \"OUT_OF_SCOPE\", \"reason\": \"<short reason>\"}"
+    )
+
+    try:
+        llm = get_llm(
+            temperature=0.0,
+            provider_override=provider,
+            model_override=model
+        )
+        res = llm.invoke(prompt)
+        raw = (res.content if hasattr(res, "content") else str(res)).strip()
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE).strip()
+        data = json.loads(raw)
+        category = str(data.get("category", "")).upper().strip()
+        if category in ("ANALYTICS", "IN_SCOPE_META", "OUT_OF_SCOPE"):
+            logger.info(f"Enterprise LLM Triage classified query='{msg[:60]}' -> {category} (reason: {data.get('reason')})")
+            return category
+    except Exception as e:
+        logger.debug(f"LLM Triage bypassed/fallback (reason: {e})")
+        return None
+    return None
+
+
 def plan_query(state: AgentState) -> Dict[str, Any]:
     """
     Semantic & Context-Aware Query Planner.
@@ -340,6 +395,27 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
         end_date=tw.end_date.isoformat(),
         time_window_label=tw.label
     )
+
+    # 0. Enterprise LLM Intent Triage Gatekeeper (Node 0)
+    llm_cat = classify_intent_with_llm(
+        msg,
+        prev_plan_dict=prev_plan_dict,
+        provider=state.get("llm_provider"),
+        model=state.get("model_name"),
+    )
+    if llm_cat == "OUT_OF_SCOPE":
+        plan.intent = "out_of_scope"
+        return _finalize_commander_plan(msg, plan, lang, "Out of Scope (Enterprise LLM Triage)")
+    if llm_cat == "IN_SCOPE_META":
+        plan.intent = "discussion"
+        if prev_plan_dict:
+            prev_plan_disc = QueryPlan(**prev_plan_dict) if isinstance(prev_plan_dict, dict) else prev_plan_dict
+            plan.is_follow_up = True
+            if prev_plan_disc.metrics:
+                plan.metrics = list(prev_plan_disc.metrics)
+            if prev_plan_disc.dimensions:
+                plan.dimensions = list(prev_plan_disc.dimensions)
+        return _finalize_commander_plan(msg, plan, lang, "In-Scope Meta / Discussion (Enterprise LLM Triage)")
 
     # 2. Dynamic Semantic Entity Linking (Supports single '=' and multi-value 'IN')
     plan.filters.extend(extract_dimension_filters(msg))
