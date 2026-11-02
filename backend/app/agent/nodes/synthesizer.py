@@ -953,6 +953,139 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
             ]
         )
 
+    # CASE 2B: Sales Channels Definition (POS, E-commerce, Marketplace, Mobile App, Social Commerce)
+    elif bool(re.search(r'\b(?:pos|point\s+of\s+sale|e-commerce|ecommerce|marketplace|mobile\s+app|social\s+commerce)\b', msg_lower)):
+        summary = (
+            "POS (Point of Sale) refers to direct, in-person retail checkout transactions conducted at physical store branches (`stores`), where payment and item handover happen immediately on-site."
+            if is_en else
+            "POS (Point of Sale) adalah kanal penjualan ritel tatap muka secara langsung di kasir gerai atau cabang toko fisik (`stores`), di mana pembayaran dan penyerahan barang kepada pelanggan terjadi seketika di lokasi toko."
+        )
+        insights = (
+            [
+                "Role of POS in Our Omnichannel Schema: In the `orders` table (`v_order_lines` / `v_orders`), `POS` is one of the 5 balanced sales channels alongside `E-commerce` (official web store), `Marketplace` (third-party platforms), `Mobile App`, and `Social Commerce` (~20% share each).",
+                "Operational Characteristics (Offline vs Online): POS transactions are directly tied to physical store branches across 3 regions (`Jawa`, `Sumatera`, `Kalimantan/Sulawesi`) and typically exhibit lower order friction than digital channels.",
+                "Analytical Use Cases: You can compare `POS` vs `E-commerce` revenue side-by-side or drill down into top-performing physical store locations."
+            ]
+            if is_en else
+            [
+                "Peran POS dalam Skema Omnichannel Database Ini: Di dalam tabel `orders` (`v_order_lines` & `v_orders`), `POS` merupakan salah satu dari 5 channel penjualan utama bersama `E-commerce` (website resmi), `Marketplace` (platform pihak ketiga), `Mobile App`, dan `Social Commerce` (masing-masing ~20% distribusi transaksi).",
+                "Karakteristik Operasional (Offline vs Online): Transaksi `POS` mewakili pembelian langsung di 12 cabang toko fisik yang tersebar di 3 region (`Jawa`, `Sumatera`, `Kalimantan/Sulawesi`), berbeda dengan 4 kanal lainnya yang berbasis transaksi digital/pengiriman.",
+                "Kegunaan dalam Analisis BI: Anda dapat membandingkan performa penjualan kasir toko fisik (`POS`) melawan kanal online (`E-commerce`) untuk mengevaluasi efektivitas strategi omnichannel."
+            ]
+        )
+        recommendations = (
+            [
+                "Compare Offline vs Online Velocity: Run the POS vs E-commerce comparison query below to evaluate weekly omnichannel performance.",
+                "Branch-Level Optimization: Identify the highest-revenue physical store branches in key cities like Jakarta or Surabaya."
+            ]
+            if is_en else
+            [
+                "Bandingkan Kecepatan Offline vs Online: Jalankan analisis perbandingan `Revenue POS vs E-commerce minggu ini` di bawah ini untuk melihat kontribusi kasir fisik dibanding toko online.",
+                "Evaluasi Produktivitas Cabang Fisik: Cek cabang toko (`store`) dengan revenue tertinggi untuk mengoptimalkan alokasi stok di gerai POS."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "POS vs E-commerce Revenue This Week", "value": "POS vs E-commerce revenue this week?"},
+                {"label": "Channel with Highest Revenue in Q1 2025", "value": "Channel with highest revenue in Q1 2025?"},
+                {"label": "Top Store in Jakarta This Month", "value": "Store in Jakarta with highest revenue this month?"}
+            ]
+            if is_en else
+            [
+                {"label": "Revenue POS vs E-commerce Minggu Ini", "value": "Revenue POS vs E-commerce minggu ini?"},
+                {"label": "Channel dengan Revenue Tertinggi di Q1 2025", "value": "Channel dengan revenue tertinggi di Q1 2025?"},
+                {"label": "Store di Jakarta dengan Revenue Tertinggi Bulan Ini", "value": "Store di Jakarta dengan revenue tertinggi bulan ini?"}
+            ]
+        )
+
+    # CASE 2C: Product Categories & SKU Definitions (FMCG, Electronics, Fashion, Home & Living, Health & Beauty)
+    elif bool(re.search(r'\b(?:fmcg|fast\s+moving|sku|stock\s+keeping|electronics|fashion|home\s*&\s*living|health\s*&\s*beauty)\b', msg_lower)):
+        summary = (
+            "FMCG (Fast-Moving Consumer Goods) refers to everyday consumer products that sell quickly at relatively low unit cost and high purchase frequency (such as packaged food, beverages, and household toiletries)."
+            if is_en else
+            "FMCG (Fast-Moving Consumer Goods) adalah kategori barang konsumsi sehari-hari yang berputar cepat dengan frekuensi pembelian berulang yang tinggi (seperti sembako, kopi, minuman, deterjen, dan kebutuhan rumah tangga harian)."
+        )
+        insights = (
+            [
+                "Catalog Representation in Database: Out of 28 total SKUs (Stock Keeping Units) across 5 categories in `products`, `FMCG` is the largest category by item count (10 SKUs), followed by `Electronics` (5), `Fashion` (5), `Home & Living` (4), and `Health & Beauty` (4).",
+                "Volume vs Unit Price Dynamics: `FMCG` drives high order-line volume and repeat customer traffic, whereas `Electronics` and `Home & Living` carry higher unit prices (`unit_price`) per transaction.",
+                "Margin Analysis: Tracking both Net Revenue and Gross Margin (`Revenue − COGS`) for `FMCG` across regions like Java helps protect profitability on high-volume staples."
+            ]
+            if is_en else
+            [
+                "Posisi FMCG di Katalog Database: Dari total 28 SKU (produk unik) pada 5 kategori di tabel `products`, `FMCG` memiliki jumlah produk terbanyak (10 SKU, seperti Beras Pandan Wangi, Kopi Bubuk Arabika, Deterjen Bubuk), diikuti `Electronics` (5 SKU), `Fashion` (5 SKU), `Home & Living` (4 SKU), dan `Health & Beauty` (4 SKU).",
+                "Karakteristik Volume vs Nilai Satuan: Kategori `FMCG` menjadi penggerak frekuensi transaksi harian, sementara kategori seperti `Electronics` memiliki harga jual satuan (`unit_price`) yang jauh lebih besar.",
+                "Pentingnya Evaluasi Margin: Dalam analisis ritel, performa `FMCG` selalu disandingkan antara Net Revenue dan Gross Margin untuk menjaga efisiensi HPP (`COGS`)."
+            ]
+        )
+        recommendations = (
+            [
+                "Analyze FMCG Regional Profitability: Check MTD Revenue and Gross Margin for FMCG in Java, then break it down by city.",
+                "Compare All 5 Categories: View the full category breakdown to compare SKU distribution and revenue contribution."
+            ]
+            if is_en else
+            [
+                "Analisis Profitabilitas Regional FMCG: Jalankan kueri `Revenue dan margin MTD untuk FMCG di Jawa` lalu lanjutkan dengan breakdown per kota.",
+                "Bandingkan 5 Kategori Produk: Lihat rincian seluruh kategori produk beserta jumlah SKU dan kontribusi pendapatannya."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "MTD Revenue & Margin for FMCG in Java", "value": "MTD Revenue and margin for FMCG in Java?"},
+                {"label": "All 5 Product Categories & SKU Counts", "value": "Daftar kategori produk beserta jumlah produknya"},
+                {"label": "Top 5 Products by Revenue Last Month", "value": "Top 5 products by revenue last month?"}
+            ]
+            if is_en else
+            [
+                {"label": "Revenue & Margin FMCG di Jawa (MTD)", "value": "Revenue dan margin MTD untuk FMCG di Jawa?"},
+                {"label": "Daftar 5 Kategori Produk & Jumlah SKU", "value": "Daftar kategori produk beserta jumlah produknya"},
+                {"label": "Top 5 Produk Berdasarkan Revenue Bulan Lalu", "value": "Top 5 produk berdasarkan revenue bulan lalu?"}
+            ]
+        )
+
+    # CASE 2D: Time Window & Customer Segment Definitions (MTD, YTD, Q1-Q4, AOV, VIP, Corporate, Retail)
+    elif bool(re.search(r'\b(?:mtd|month\s+to\s+date|ytd|year\s+to\s+date|aov|average\s+order|vip|corporate|segmen\s+pelanggan)\b', msg_lower)):
+        summary = (
+            "MTD (Month-to-Date) and YTD (Year-to-Date) are standard analytical time windows anchored to the system's reference date (`AS_OF_DATE = 2026-10-29`, Asia/Jakarta timezone)."
+            if is_en else
+            "MTD (Month-to-Date) dan YTD (Year-to-Date) adalah standar rentang waktu evaluasi kinerja bisnis yang dihitung dari awal periode berjalan hingga tanggal acuan sistem (`AS_OF_DATE = 2026-10-29`, zona waktu Asia/Jakarta)."
+        )
+        insights = (
+            [
+                "MTD (Month-to-Date / 'Bulan Ini'): Evaluates transactions from the 1st of the current month (`2026-10-01`) up to `2026-10-29`.",
+                "YTD (Year-to-Date / 'Tahun Ini'): Evaluates cumulative performance from January 1st (`2026-01-01`) up to `2026-10-29`.",
+                "Customer Segments (`Retail`, `Corporate`, `VIP`): The `customers` table classifies buyers into three tiers (`Retail`, `Corporate`, and `VIP`), allowing you to evaluate which segment yields the highest YTD Gross Margin."
+            ]
+            if is_en else
+            [
+                "MTD (Month-to-Date / 'Bulan Ini'): Mengevaluasi akumulasi transaksi sejak tanggal 1 bulan berjalan (`2026-10-01`) hingga tanggal acuan saat ini (`2026-10-29`).",
+                "YTD (Year-to-Date / 'Tahun Ini'): Mengevaluasi akumulasi kinerja sejak awal tahun (`2026-01-01`) hingga tanggal acuan (`2026-10-29`).",
+                "Segmen Pelanggan (`Retail`, `Corporate`, `VIP`) & AOV: Tabel `customers` mengelompokkan pembeli ke dalam 3 segmen (`Retail`, `Corporate`, `VIP`), sedangkan AOV (Average Order Value) mengukur rata-rata nilai belanja per pesanan."
+            ]
+        )
+        recommendations = (
+            [
+                "Compare Short-Term vs Long-Term Trends: Pair MTD operational monitoring with YTD customer segment margin analysis."
+            ]
+            if is_en else
+            [
+                "Kombinasikan Pemantauan Jangka Pendek & Panjang: Gunakan periode MTD untuk memantau target bulanan dan YTD untuk mengevaluasi segmen pelanggan paling menguntungkan."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "MTD GMV for Java Region", "value": "MTD GMV for Java region?"},
+                {"label": "Customer Segment with Highest YTD Margin", "value": "Customer segment with highest margin YTD?"},
+                {"label": "Channel with Highest Revenue in Q1 2025", "value": "Channel with highest revenue in Q1 2025?"}
+            ]
+            if is_en else
+            [
+                {"label": "GMV MTD untuk Region Jawa", "value": "GMV MTD untuk region Jawa?"},
+                {"label": "Segment Customer dengan Margin Tertinggi YTD", "value": "Segment customer dengan margin tertinggi YTD?"},
+                {"label": "Channel dengan Revenue Tertinggi di Q1 2025", "value": "Channel dengan revenue tertinggi di Q1 2025?"}
+            ]
+        )
+
     # CASE 3: Contextual Discussion / Strategy / Interpretation of Previous Data Turn
     elif last_rows:
         # Summarize the key figures from `last_rows` and optionally enrich via LLM
@@ -1049,35 +1182,69 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
             ]
         )
 
-    # CASE 4: General Advisory / Open Discussion without Prior Turn Rows
+    # CASE 4: General Advisory / Open Discussion via LLM (with Deterministic Fallback)
     else:
-        summary = (
-            "As your Enterprise Conversational BI Advisor, I can help you both analyze live database metrics and interpret their business meaning, formulas, and strategic implications."
-            if is_en else
-            "Sebagai Konsultan & Asisten Conversational BI Anda, saya dapat membantu mengeksekusi data transaksi sekaligus mendiskusikan arti metrik, rumus perhitungan, evaluasi performa, hingga strategi bisnis."
-        )
-        insights = (
-            [
-                "Core Financial Metrics Available: GMV (all order statuses), Net Revenue (`status = 'Completed'`), COGS (`qty × unit_cost`), Gross Margin (`Revenue − COGS`), and Cancel Rate (`Cancelled / Total Orders`).",
-                "Catalog & Omnichannel Coverage: 28 distinct products across 5 categories (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`), sold across 5 channels (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`).",
-                "Interactive Multi-Turn Context: After running any data query, you can ask 'What does this number mean?', 'Is this good or bad?', or 'What strategy should we take?'."
-            ]
-            if is_en else
-            [
-                "Metrik Finansial Utama: GMV (seluruh status pesanan), Net Revenue (khusus `status = 'Completed'`), COGS (`qty × unit_cost`), Gross Margin (`Revenue − COGS`), serta Cancel Rate (`Cancelled / Total Pesanan`).",
-                "Cakupan Katalog & 5 Kanal: Mencakup 28 produk pada 5 kategori (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`) di 5 kanal (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`).",
-                "Diskusi Multi-Turn Interaktif: Setelah menjalankan kueri data apa pun, Anda dapat berdiskusi seperti 'Apa artinya angka ini?', 'Apakah angka ini bagus atau bahaya?', atau 'Strategi apa yang harus dilakukan?'."
-            ]
-        )
-        recommendations = (
-            [
-                "Start with a Headline KPI: Run one of the baseline queries below, then ask follow-up questions to drill down or discuss strategy."
-            ]
-            if is_en else
-            [
-                "Mulai dari Indikator Utama: Jalankan salah satu analisis dasar di bawah ini, lalu ajukan pertanyaan diskusi atau breakdown lanjutan."
-            ]
-        )
+        llm_answered = False
+        try:
+            llm = get_llm(
+                provider_override=state.get("llm_provider"),
+                model_override=state.get("model_name"),
+            )
+            lang_instruction = "English" if is_en else "Bahasa Indonesia"
+            advisory_prompt = (
+                f"You are an Enterprise Retail Conversational BI Consultant.\n"
+                f"Respond strictly in {lang_instruction} as a valid JSON object with keys: "
+                f"\"summary\" (1-2 concise executive sentences directly answering the user's question), "
+                f"\"insights\" (array of 3 analytical/conceptual bullet strings grounded in retail BI), and "
+                f"\"recommendations\" (array of 2 actionable business recommendation strings).\n"
+                f"Domain Context: 28 products across 5 categories (FMCG, Electronics, Fashion, Home & Living, Health & Beauty), "
+                f"12 stores across 3 regions (Jawa, Sumatera, Kalimantan/Sulawesi), 5 sales channels (POS, E-commerce, Marketplace, Mobile App, Social Commerce), "
+                f"3 customer segments (Retail, Corporate, VIP). Metrics: GMV (all statuses), Net Revenue (Completed only), COGS, Gross Margin, Cancel Rate.\n"
+                f"User Question: {user_msg}\n"
+                f"Output ONLY raw JSON without markdown fences."
+            )
+            llm_res = llm.invoke(advisory_prompt)
+            raw_txt = (llm_res.content if hasattr(llm_res, "content") else str(llm_res)).strip()
+            raw_txt = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_txt, flags=re.IGNORECASE).strip()
+            parsed_json = json.loads(raw_txt)
+            if isinstance(parsed_json, dict) and parsed_json.get("summary"):
+                summary = str(parsed_json["summary"])
+                if isinstance(parsed_json.get("insights"), list) and parsed_json["insights"]:
+                    insights = [str(x) for x in parsed_json["insights"][:4]]
+                if isinstance(parsed_json.get("recommendations"), list) and parsed_json["recommendations"]:
+                    recommendations = [str(x) for x in parsed_json["recommendations"][:3]]
+                llm_answered = True
+        except Exception:
+            llm_answered = False
+
+        if not llm_answered:
+            summary = (
+                "As your Enterprise Conversational BI Advisor, I can help you both analyze live database metrics and interpret their business meaning, formulas, and strategic implications."
+                if is_en else
+                "Sebagai Konsultan & Asisten Conversational BI Anda, saya dapat membantu mengeksekusi data transaksi sekaligus mendiskusikan arti metrik, rumus perhitungan, evaluasi performa, hingga strategi bisnis."
+            )
+            insights = (
+                [
+                    "Core Financial Metrics Available: GMV (all order statuses), Net Revenue (`status = 'Completed'`), COGS (`qty × unit_cost`), Gross Margin (`Revenue − COGS`), and Cancel Rate (`Cancelled / Total Orders`).",
+                    "Catalog & Omnichannel Coverage: 28 distinct products across 5 categories (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`), sold across 5 channels (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`).",
+                    "Interactive Multi-Turn Context: After running any data query, you can ask 'What does this number mean?', 'Is this good or bad?', or 'What strategy should we take?'."
+                ]
+                if is_en else
+                [
+                    "Metrik Finansial Utama: GMV (seluruh status pesanan), Net Revenue (khusus `status = 'Completed'`), COGS (`qty × unit_cost`), Gross Margin (`Revenue − COGS`), serta Cancel Rate (`Cancelled / Total Pesanan`).",
+                    "Cakupan Katalog & 5 Kanal: Mencakup 28 produk pada 5 kategori (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`) di 5 kanal (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`).",
+                    "Diskusi Multi-Turn Interaktif: Setelah menjalankan kueri data apa pun, Anda dapat berdiskusi seperti 'Apa artinya angka ini?', 'Apakah angka ini bagus atau bahaya?', atau 'Strategi apa yang harus dilakukan?'."
+                ]
+            )
+            recommendations = (
+                [
+                    "Start with a Headline KPI: Run one of the baseline queries below, then ask follow-up questions to drill down or discuss strategy."
+                ]
+                if is_en else
+                [
+                    "Mulai dari Indikator Utama: Jalankan salah satu analisis dasar di bawah ini, lalu ajukan pertanyaan diskusi atau breakdown lanjutan."
+                ]
+            )
         follow_up_options = (
             [
                 {"label": "Cancel Rate This Month", "value": "Cancel rate this month?"},

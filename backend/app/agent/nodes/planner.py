@@ -17,9 +17,22 @@ from backend.app.stores.pg_executor import execute_readonly_sql
 
 
 def _detect_language(text: str, explicit_lang: Optional[str] = None) -> str:
+    t = text.lower()
+    # If the user's message strongly uses conversational Indonesian or English phrasing, match the message language
+    if re.search(
+        r'\b(?:saya|aku|pengen|ingin|mau\s+tau|mau\s+tahu|definisi|pengertian|artinya|maksudnya|'
+        r'apa\s+itu|apa\s+bedanya|bagaimana|gimana|kenapa|strategi\s+apa|saran\s+kamu|menurut\s+kamu|'
+        r'sebutkan\s+user|tolong\s+jelaskan)\b',
+        t,
+    ):
+        return "id"
+    if re.search(
+        r'\b(?:what\s+is|what\s+does|how\s+is|explain\s+the|difference\s+between|what\s+strategy|is\s+this\s+good)\b',
+        t,
+    ):
+        return "en"
     if explicit_lang in ("id", "en"):
         return explicit_lang
-    t = text.lower()
     en_markers = ["what", "which", "highest", "lowest", "last month", "this month", "this week", "by revenue", "for java", "how many"]
     id_markers = ["untuk", "bulan", "minggu", "tertinggi", "terendah", "berdasarkan", "berapa", "di jawa", "paling", "apa", "ini"]
     en_score = sum(1 for m in en_markers if m in t)
@@ -232,11 +245,11 @@ def _is_discussion_or_advisory_query(msg_lower: str) -> bool:
     # 1. Explicit Meaning / Definition / Formula / Conceptual Difference
     if re.search(
         r'\b(?:apa\s+artinya|artinya\s+apa|apa\s+maksud(?:nya)?|maksudnya\s+(?:apa|gimana|bagaimana)|'
-        r'ini\s+berarti\s+apa|berarti\s+apa|maksud\s+dari|apa\s+itu\s+(?:gmv|revenue|net\s+revenue|margin|gross\s+margin|cogs|hpp|cancel\s+rate)|'
+        r'ini\s+berarti\s+apa|berarti\s+apa|maksud\s+dari|apa\s+itu\s+\w+|apa\s+sih\s+\w+|'
         r'definisi|pengertian|rumus(?:nya)?|cara\s+(?:hitung|menghitung|ngitung)|'
-        r'apa\s+bedanya|bedanya\s+apa|perbedaan(?:nya)?\s+(?:antara\s+)?|'
-        r'what\s+does\s+.*\s+mean|what\s+is\s+the\s+(?:meaning|definition|difference|formula)|'
-        r'how\s+is\s+.*\s+calculated|difference\s+between|meaning\s+of)\b',
+        r'apa\s+bedanya|bedanya\s+apa|perbedaan(?:nya)?\s+(?:antara\s+)?|jelasin\s+dulu|tau\s+dulu|'
+        r'what\s+does\s+.*\s+mean|what\s+is\s+(?:a\s+|an\s+|the\s+)?(?:meaning|definition|difference|formula|pos|fmcg|gmv|mtd|ytd|cogs|sku|aov|e-commerce|marketplace|margin|revenue|cancel\s+rate)|'
+        r'how\s+is\s+.*\s+calculated|difference\s+between|meaning\s+of|define\s+\w+)\b',
         msg_lower
     ):
         return True

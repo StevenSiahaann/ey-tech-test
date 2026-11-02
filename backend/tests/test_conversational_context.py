@@ -190,6 +190,13 @@ class TestConversationalContext(unittest.TestCase):
         self.assertIn("GMV", r4.summary)
         self.assertIn("Net Revenue", r4.summary)
 
+        # Turn 5: Domain term definition ('saya pengen tau dulu definisi dari POS') even when UI toggle is 'en'
+        r5 = process_conversational_turn(sid, "saya pengen tau dulu definisi dari POS", language="en")
+        self.assertEqual(r5.type, "discussion")
+        self.assertEqual(r5.language, "id")
+        self.assertIn("Point of Sale", r5.summary)
+        self.assertIn("gerai", r5.summary.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
