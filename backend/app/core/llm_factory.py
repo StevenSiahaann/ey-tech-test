@@ -262,8 +262,8 @@ def get_llm(
             azure_deployment=target_model,
             api_version=settings.AZURE_OPENAI_API_VERSION,
             temperature=temperature,
-            max_retries=1,
-            timeout=10,
+            max_retries=2,
+            timeout=30,
             callbacks=callbacks
         )
 
@@ -274,8 +274,8 @@ def get_llm(
         model=target_model,
         google_api_key=api_key,
         temperature=temperature,
-        max_retries=1,
-        timeout=10,
+        max_retries=2,
+        timeout=30,
         callbacks=callbacks
     )
 
