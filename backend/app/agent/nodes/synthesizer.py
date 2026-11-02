@@ -827,9 +827,13 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
         or bool(re.search(r'\b(?:bedanya|perbedaan|difference\s+between)\b', msg_lower) and ("gmv" in msg_lower or "revenue" in msg_lower or "margin" in msg_lower))
         or any(k in msg_lower for k in ["apa itu gmv", "artinya gmv", "maksudnya gmv", "apa itu margin", "artinya margin", "apa itu revenue", "artinya revenue", "apa itu cogs", "artinya cogs"])
     )
+    asks_channel_def = bool(re.search(r'\b(?:pos|point\s+of\s+sale|e-commerce|ecommerce|marketplace|mobile\s+app|social\s+commerce)\b', msg_lower))
+    asks_category_def = bool(re.search(r'\b(?:fmcg|fast\s+moving|sku|stock\s+keeping|electronics|fashion|home\s*&\s*living|health\s*&\s*beauty)\b', msg_lower))
+    asks_time_seg_def = bool(re.search(r'\b(?:mtd|month\s+to\s+date|ytd|year\s+to\s+date|aov|average\s+order|vip|corporate|segmen\s+pelanggan)\b', msg_lower))
+    asks_explicit_domain_term = asks_gmv_vs_rev or asks_channel_def or asks_category_def or asks_time_seg_def
 
     # CASE 1: Discussion about Cancel Rate (e.g. "ini berarti apa artinya cancel rate?", "7.13% bagus atau jelek?")
-    if not asks_gmv_vs_rev and ("cancel_rate" in active_metrics or "cancel" in msg_lower or "batal" in msg_lower):
+    if ("cancel" in msg_lower or "batal" in msg_lower) or (not asks_explicit_domain_term and "cancel_rate" in active_metrics):
         cr_val = first_row.get("cancel_rate_pct")
         canc_cnt = first_row.get("cancelled_orders")
         tot_cnt = first_row.get("total_orders")
