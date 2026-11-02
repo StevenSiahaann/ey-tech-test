@@ -78,13 +78,19 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
     is_en = lang == "en"
 
     # Base Assumptions (100% grounded in resolved time window and metric definitions)
-    assumptions: List[str] = [
-        (
+    if plan.start_date and plan.end_date:
+        time_assumption = (
             f"Time window evaluated: {plan.time_window_label} ({plan.start_date} to {plan.end_date}) in Asia/Jakarta timezone"
             if is_en else
             f"Periode waktu dievaluasi untuk: {plan.time_window_label} ({plan.start_date} s.d. {plan.end_date}) zona waktu Asia/Jakarta"
         )
-    ]
+    else:
+        time_assumption = (
+            "Time window evaluated: All-Time (entire dataset without date filter) in Asia/Jakarta timezone"
+            if is_en else
+            "Periode waktu dievaluasi untuk: Seluruh Data (tanpa filter tanggal) zona waktu Asia/Jakarta"
+        )
+    assumptions: List[str] = [time_assumption]
     if "gmv" in plan.metrics:
         assumptions.append(
             "GMV is calculated as Σ(qty × unit_price − discount) across all order statuses"
@@ -372,6 +378,55 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
             )
             kpis.append(KPICard(label=f"Total {label_clean}", value=val, format="number", subtitle=plan.time_window_label))
             insights.append(summary)
+        elif col_names[0] == "product_category" and count_col == "total_products":
+            dim_col = "product_category"
+            num_cats = len(rows)
+            total_prods = sum(int(r.get(count_col, 0)) for r in rows)
+            cat_names = [str(r.get(dim_col)) for r in rows]
+            cat_breakdown_str = ", ".join(
+                f"{r.get(dim_col)} ({int(r.get(count_col, 0))} {'products' if is_en else 'produk'})"
+                for r in rows
+            )
+            top_r = rows[0]
+            top_cnt = int(top_r.get(count_col, 0))
+            top_pct = (top_cnt / total_prods * 100.0) if total_prods > 0 else 0.0
+
+            summary = (
+                f"There are {num_cats} product categories encompassing {total_prods} total products: {cat_breakdown_str}."
+                if is_en else
+                f"Terdapat {num_cats} kategori produk yang mencakup total {total_prods} produk: {cat_breakdown_str}."
+            )
+            kpis.append(KPICard(
+                label="Total Product Categories" if is_en else "Total Kategori Produk",
+                value=num_cats,
+                format="number",
+                subtitle=", ".join(cat_names)
+            ))
+            kpis.append(KPICard(
+                label="Total Products (SKUs)" if is_en else "Total Produk (SKU)",
+                value=total_prods,
+                format="number",
+                subtitle=f"Across {num_cats} categories" if is_en else f"Tersebar di {num_cats} kategori"
+            ))
+            kpis.append(KPICard(
+                label="Largest Category" if is_en else "Kategori Terbanyak",
+                value=f"{top_r.get(dim_col)} ({top_cnt})",
+                format="text",
+                subtitle=f"{top_pct:.1f}% of products" if is_en else f"{top_pct:.1f}% dari total produk"
+            ))
+            insights.append(summary)
+            insights.append(
+                f"Note: {num_cats} is the number of distinct product categories ({', '.join(cat_names)}), while {total_prods} is the total number of individual products across those {num_cats} categories."
+                if is_en else
+                f"Penjelasan: {num_cats} adalah jumlah kategori produk ({', '.join(cat_names)}), sedangkan {total_prods} adalah total keseluruhan item produk yang tersebar di ke-{num_cats} kategori tersebut."
+            )
+            if len(rows) > 1:
+                chart_config = ChartConfig(
+                    type="bar",
+                    x_axis=dim_col,
+                    y_axes=[count_col],
+                    title="Products per Product Category" if is_en else "Jumlah Produk per Kategori Produk"
+                )
         else:
             dim_col = col_names[0]
             dim_clean = dim_col.replace("_", " ").title()
@@ -511,6 +566,14 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
         # Prefer plan.sort_by if present in columns
         if plan.sort_by and plan.sort_by in col_names:
             metric_col = plan.sort_by
+
+        # Defensive sort: ensure rows are strictly ordered by metric_col according to plan.sort_direction
+        if len(rows) > 1 and metric_col in col_names:
+            try:
+                is_desc = (plan.sort_direction or "DESC").upper() != "ASC"
+                rows = sorted(rows, key=lambda r: float(r.get(metric_col) or 0.0), reverse=is_desc)
+            except (ValueError, TypeError):
+                pass
 
         metric_label = metric_col.replace("total_", "").upper() if metric_col in ("total_gmv", "total_cogs") else metric_col.replace("total_", "").title()
         total_sum = sum(float(r.get(metric_col) or 0.0) for r in rows)
