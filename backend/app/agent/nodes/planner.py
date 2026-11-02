@@ -912,9 +912,9 @@ def _detect_metrics_and_intent(
         plan.dimensions = ["product_brand"]
     elif re.search(r'\b(?:segment|segments|segmen)(?:nya)?\b', msg_lower) or "customer_segment" in in_filter_fields:
         plan.dimensions = ["customer_segment"]
-    elif re.search(r'\b(?:per\s+kota|per\s+city|by\s+city|kota\s+mana|which\s+city|antar\s+kota)\b', msg_lower) or "store_city" in in_filter_fields:
+    elif re.search(r'\b(?:per\s+kota|per\s+city|by\s+city|kota\s+mana|which\s+city|antar\s+kota|di\s+kota\s+mana)\b', msg_lower) or "store_city" in in_filter_fields:
         plan.dimensions = ["store_city"]
-    elif re.search(r'\b(?:per\s+region|per\s+wilayah|by\s+region|wilayah\s+mana|which\s+region)\b', msg_lower) or "store_region" in in_filter_fields:
+    elif re.search(r'\b(?:per\s+region|per\s+wilayah|per\s+daerah|by\s+region|wilayah\s+mana|daerah\s+mana|which\s+region|di\s+region\s+mana|di\s+wilayah\s+mana|di\s+daerah\s+mana)\b', msg_lower) or "store_region" in in_filter_fields:
         plan.dimensions = ["store_region"]
     elif "product_category" in in_filter_fields:
         plan.dimensions = ["product_category"]
@@ -939,7 +939,10 @@ def _detect_metrics_and_intent(
         plan.limit = int(n_str)
     elif has_superlative:
         plan.intent = "ranking"
-        plan.limit = 5 if is_ascending and "daftar" in msg_lower else 1
+        if re.search(r'\b(?:mana\s+saja|mana\s+aja|apa\s+saja|apa\s+aja|semua|daftar)\b', msg_lower):
+            plan.limit = None
+        else:
+            plan.limit = 5 if is_ascending and "daftar" in msg_lower else 1
     elif has_breakdown_marker:
         plan.intent = "breakdown"
     else:

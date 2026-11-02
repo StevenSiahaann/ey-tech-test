@@ -284,26 +284,60 @@ def extract_dimension_filters(message: str) -> List[FilterItem]:
     return filters
 
 
+_KNOWN_UNLISTED_LOCATIONS = {
+    "papua", "jayapura", "sorong", "merauke", "timika",
+    "maluku", "ambon", "ternate",
+    "aceh", "banda aceh", "lhokseumawe",
+    "lampung", "bandar lampung",
+    "riau", "pekanbaru", "dumai", "batam", "kepulauan riau", "bintan",
+    "bengkulu", "jambi", "bangka", "belitung", "pangkalpinang",
+    "banten", "tangerang", "serang", "cilegon", "bogor", "depok", "bekasi",
+    "cirebon", "tasikmalaya", "sukabumi", "karawang", "purwokerto", "tegal",
+    "solo", "surakarta", "magelang", "pekalongan", "salatiga", "kudus",
+    "malang", "kediri", "madiun", "jember", "banyuwangi", "gresik", "sidoarjo",
+    "kupang", "lombok", "mataram", "bima", "labuan bajo",
+    "pontianak", "singkawang", "palangkaraya", "tarakan",
+    "manado", "palu", "kendari", "gorontalo",
+    "singapore", "singapura", "malaysia", "kuala lumpur", "bangkok", "tokyo",
+}
+
+
 def detect_unresolved_location_mention(message: str, active_filters: List[FilterItem]) -> Optional[str]:
     """
-    Detects if the user explicitly asked for a location/region/city/product after 'di <X>' or 'region <X>' or 'kota <X>'
-    that does not exist in the database catalog (e.g. 'Revenue di Papua bulan ini' or 'Revenue Indomie bulan ini'),
-    preventing silent fallback to national/unfiltered totals.
+    Detects if the user explicitly asked for a specific geographic location after 'di <X>', 'kota <X>', or 'region <X>'
+    that does not exist in the database catalog (e.g. 'GMV di Papua bulan ini' or 'Revenue di Malang'),
+    preventing silent fallback to national/unfiltered totals while never triggering on generic question words
+    like 'di daerah mana saja?'.
     """
+    msg_lower = message.lower()
+    # Never trigger if the user is asking 'which region/city/area?' ('mana', 'mana saja', 'apa saja')
+    if re.search(r'\b(?:di\s+)?(?:daerah|wilayah|region|kota|city|area|lokasi|cabang|toko|tempat|provinsi|pulau)\s+(?:mana|apa)\b', msg_lower):
+        return None
+
     has_loc_filter = any(f.field in ("store_city", "store_region", "store_name") for f in active_filters)
-    if not has_loc_filter:
-        m_loc = re.search(
-            r'\b(?:di(?:\s+kota|\s+region|\s+wilayah)?|kota|region|wilayah|cabang)\s+([A-Z][a-zA-Z]{2,}|\b(?:papua|maluku|aceh|lampung|riau|batam|bogor|depok|malang|solo|cirebon|kupang|ambon|jayapura|singapore|malaysia)\b)',
-            message,
-            re.IGNORECASE,
-        )
-        if m_loc:
-            cand = m_loc.group(1).strip()
-            if cand.lower() not in {
-                "mana", "apa", "ini", "itu", "tadi", "atas", "bawah", "tertinggi", "terendah",
-                "terbesar", "bulan", "minggu", "tahun", "indonesia", "nasional", "semua", "seluruh",
-                "kategori", "channel", "kanal", "segmen", "toko", "store", "database", "katalog", "sistem",
-                "q1", "q2", "q3", "q4", "mtd", "ytd", "pos", "fmcg"
-            }:
-                return cand
+    if has_loc_filter:
+        return None
+
+    # 1. Check known unlisted Indonesian/regional locations after 'di', 'kota', 'region', 'wilayah', 'cabang', 'untuk'
+    for loc in sorted(_KNOWN_UNLISTED_LOCATIONS, key=len, reverse=True):
+        pattern = r'\b(?:di(?:\s+kota|\s+region|\s+wilayah|\s+daerah)?|kota|region|wilayah|daerah|cabang|untuk)\s+' + re.escape(loc) + r'\b'
+        m = re.search(pattern, msg_lower)
+        if m:
+            return loc.title()
+
+    # 2. Check explicitly typed proper location after 'di kota <ProperName>' or 'di region <ProperName>' (case-sensitive Capitalized word)
+    m_explicit = re.search(
+        r'\b(?:di\s+kota|di\s+region|di\s+wilayah|di\s+daerah|kota|region|wilayah)\s+([A-Z][a-zA-Z]{2,})\b',
+        message,
+    )
+    if m_explicit:
+        cand = m_explicit.group(1).strip()
+        if cand.lower() not in {
+            "mana", "apa", "ini", "itu", "tadi", "atas", "bawah", "tertinggi", "terendah",
+            "terbesar", "terlaris", "bulan", "minggu", "tahun", "indonesia", "nasional",
+            "semua", "seluruh", "daerah", "wilayah", "region", "kota", "area", "lokasi",
+            "kategori", "channel", "kanal", "segmen", "toko", "store", "database", "katalog",
+            "sistem", "q1", "q2", "q3", "q4", "mtd", "ytd", "pos", "fmcg", "saja", "aja"
+        }:
+            return cand
     return None
