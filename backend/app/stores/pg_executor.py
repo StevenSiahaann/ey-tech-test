@@ -8,6 +8,9 @@ import time
 import os
 from typing import Dict, Any, List, Optional
 from backend.app.core.config import settings
+from backend.app.core.logger import get_logger
+
+logger = get_logger("stores.pg_executor")
 
 _duckdb_con = None
 _pg_localhost_offline = False
@@ -101,6 +104,7 @@ def execute_readonly_sql(sql: str, timeout_ms: Optional[int] = None) -> QueryExe
 
                 dur_ms = round((time.time() - t_start) * 1000, 2)
                 conn.close()
+                logger.info(f"[PostgreSQL] Executed read-only SQL in {dur_ms}ms | rows={len(rows)}")
                 return QueryExecutionResult(
                     success=True,
                     columns=columns,
@@ -108,9 +112,10 @@ def execute_readonly_sql(sql: str, timeout_ms: Optional[int] = None) -> QueryExe
                     row_count=len(rows),
                     execution_time_ms=dur_ms
                 )
-        except Exception:
+        except Exception as pg_err:
             if is_localhost_dsn:
                 _pg_localhost_offline = True
+            logger.debug(f"PostgreSQL connection unavailable ({pg_err}); falling back to embedded DuckDB engine.")
 
     # 2. Local Embedded DuckDB Fallback
     try:
@@ -136,6 +141,7 @@ def execute_readonly_sql(sql: str, timeout_ms: Optional[int] = None) -> QueryExe
                 rows.append(row_dict)
 
             dur_ms = round((time.time() - t_start) * 1000, 2)
+            logger.info(f"[DuckDB Engine] Executed read-only SQL in {dur_ms}ms | rows={len(rows)}")
             return QueryExecutionResult(
                 success=True,
                 columns=columns,
@@ -145,6 +151,7 @@ def execute_readonly_sql(sql: str, timeout_ms: Optional[int] = None) -> QueryExe
             )
     except Exception as e:
         dur_ms = round((time.time() - t_start) * 1000, 2)
+        logger.error(f"SQL execution failed after {dur_ms}ms: {e}")
         return QueryExecutionResult(
             success=False,
             columns=[],

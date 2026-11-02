@@ -9,8 +9,11 @@ from pathlib import Path
 from typing import Dict, Any, List
 from backend.app.agent.state import AgentState, QueryPlan
 from backend.app.core.llm_factory import get_llm, get_langfuse_callback
+from backend.app.core.logger import get_logger
 from backend.app.semantic.schema_registry import get_schema_prompt_text
 from backend.app.stores.vector_client import retrieve_few_shots
+
+logger = get_logger("agent.generator")
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "sql_gen_prompt.md"
 _CACHED_SYSTEM_HEADER: str = ""
@@ -326,8 +329,13 @@ SQL:"""
             elif is_distinct_count and ("count(*)" in sql_lower or "group by product_id" in sql_lower or "group by store_id" in sql_lower):
                 raw_sql = compile_sql_from_plan(plan)
 
+        logger.info(f"[{plan.specialist_agent if plan else 'Generator'}] Generated SQL via LLM: '{' '.join(raw_sql.split())[:110]}'")
         return {"raw_sql": raw_sql, "current_step": "Semantic SQL Generated via LLM"}
-    except Exception:
+    except Exception as gen_err:
         # Compile SQL deterministically from the structured QueryPlan
         compiled_sql = compile_sql_from_plan(plan)
+        logger.info(
+            f"[{plan.specialist_agent if plan else 'Generator'}] Compiled SQL via Deterministic Semantic Compiler "
+            f"(LLM fallback: {str(gen_err)[:60]}): '{' '.join(compiled_sql.split())[:110]}'"
+        )
         return {"raw_sql": compiled_sql, "current_step": "Semantic SQL Compiled from Structured QueryPlan"}

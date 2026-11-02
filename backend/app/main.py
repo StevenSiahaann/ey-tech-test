@@ -4,18 +4,37 @@ FastAPI Application Entry Point.
 """
 
 import os
-from fastapi import FastAPI
+import time
+import uuid
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from backend.app.core.config import settings
+from backend.app.core.logger import setup_logging, get_logger, set_log_context
 from backend.app.api.routes import router as api_router
+
+setup_logging()
+logger = get_logger("main")
 
 app = FastAPI(
     title=settings.APP_NAME,
     description="Conversational Data Agent translating natural language (Indonesian/English) into safe, validated SQL.",
     version="1.0.0"
 )
+
+
+@app.middleware("http")
+async def structured_logging_middleware(request: Request, call_next):
+    req_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:8]
+    set_log_context(request_id=req_id, step_name="http_request")
+    t0 = time.time()
+    response = await call_next(request)
+    dur_ms = round((time.time() - t0) * 1000, 1)
+    response.headers["X-Request-ID"] = req_id
+    if request.url.path.startswith("/api"):
+        logger.info(f"HTTP {request.method} {request.url.path} -> {response.status_code} ({dur_ms}ms)")
+    return response
 
 # Enable CORS for Vite frontend
 app.add_middleware(

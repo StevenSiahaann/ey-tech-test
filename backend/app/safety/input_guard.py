@@ -6,6 +6,9 @@ and destructive DML/DDL intents before LLM processing.
 
 import re
 from typing import Optional
+from backend.app.core.logger import log_security_event, get_logger
+
+logger = get_logger("safety.input_guard")
 
 CREDENTIAL_PATTERNS = [
     r"\b(password|passwd|secret_key|api_key|credential|credentials|connection\s+string|database_url|db_url|env\s+var|pg_shadow|pg_authid|pg_user)\b",
@@ -50,6 +53,11 @@ def check_input_safety(user_text: str, language: Optional[str] = "id") -> GuardR
     # 1. Credential & Secret Exfiltration Guardrail
     for pattern in CREDENTIAL_PATTERNS:
         if re.search(pattern, t, re.IGNORECASE):
+            log_security_event(
+                event_type="INPUT_CREDENTIAL_EXFILTRATION",
+                status="BLOCKED",
+                detail=f"Matched pattern='{pattern}' on input='{user_text[:100]}'",
+            )
             return GuardResult(
                 is_safe=False,
                 violation_type="credential_exfiltration",
@@ -68,6 +76,11 @@ def check_input_safety(user_text: str, language: Optional[str] = "id") -> GuardR
     # 2. Destructive DML / DDL Guardrail
     for pattern in DESTRUCTIVE_PATTERNS:
         if re.search(pattern, t, re.IGNORECASE):
+            log_security_event(
+                event_type="INPUT_DESTRUCTIVE_DML_DDL",
+                status="BLOCKED",
+                detail=f"Matched pattern='{pattern}' on input='{user_text[:100]}'",
+            )
             return GuardResult(
                 is_safe=False,
                 violation_type="destructive_dml_ddl",
@@ -86,6 +99,11 @@ def check_input_safety(user_text: str, language: Optional[str] = "id") -> GuardR
     # 3. Prompt Injection & Guardrail Bypass
     for pattern in INJECTION_PATTERNS:
         if re.search(pattern, t, re.IGNORECASE):
+            log_security_event(
+                event_type="INPUT_PROMPT_INJECTION",
+                status="BLOCKED",
+                detail=f"Matched pattern='{pattern}' on input='{user_text[:100]}'",
+            )
             return GuardResult(
                 is_safe=False,
                 violation_type="prompt_injection",
@@ -101,4 +119,5 @@ def check_input_safety(user_text: str, language: Optional[str] = "id") -> GuardR
                 ),
             )
 
+    logger.debug(f"Input passed L1 guardrail check: '{user_text[:80]}'")
     return GuardResult(is_safe=True, violation_type=None)

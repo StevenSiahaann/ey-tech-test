@@ -11,9 +11,12 @@ Translates user queries (ID & EN) into a complete, structured QueryPlan:
 import re
 from typing import Dict, Any, Optional, List
 from backend.app.agent.state import AgentState, QueryPlan, FilterItem
+from backend.app.core.logger import get_logger
 from backend.app.semantic.time_resolver import resolve_time_window, get_as_of_date
 from backend.app.semantic.dimension_catalog import extract_dimension_filters
 from backend.app.stores.pg_executor import execute_readonly_sql
+
+logger = get_logger("agent.planner")
 
 
 def _detect_language(text: str, explicit_lang: Optional[str] = None) -> str:
@@ -160,6 +163,11 @@ def _finalize_commander_plan(msg: str, plan: QueryPlan, lang: str, step_desc: st
     """Finalizes Commander routing metadata (`specialist_agent` and `standalone_query`) on the QueryPlan."""
     plan.specialist_agent = _assign_specialist_agent(plan)
     plan.standalone_query = _build_standalone_query(msg, plan, lang)
+    logger.info(
+        f"Commander routed -> specialist={plan.specialist_agent} | intent={plan.intent} | "
+        f"metrics={plan.metrics} | dims={plan.dimensions} | window={plan.time_window_label} | "
+        f"followup={plan.is_follow_up} | standalone='{plan.standalone_query[:80]}'"
+    )
     return {
         "plan": plan,
         "language": lang,

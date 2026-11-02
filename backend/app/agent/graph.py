@@ -5,13 +5,18 @@ SQL Generation, AST Validation with Self-Correction Retry Loop, Execution,
 Grounded Synthesis, and Session State Persistence.
 """
 
+import logging
 import re
 import time
+import uuid
 from typing import Dict, Any, Generator, Optional, Literal
 from langgraph.graph import StateGraph, END
 
 from backend.app.agent.state import AgentState, AgentResponse, ClarificationPayload
+from backend.app.core.logger import get_logger, set_log_context, log_step_event
 from backend.app.safety.input_guard import check_input_safety
+
+logger = get_logger("agent.graph")
 from backend.app.stores.redis_session import session_store
 from backend.app.agent.nodes.planner import plan_query
 from backend.app.stores.vector_client import retrieve_few_shots
@@ -184,16 +189,25 @@ def stream_conversational_turn(
 
     steps_log = []
     t_start = time.time()
+    turn_req_id = uuid.uuid4().hex[:8]
+    set_log_context(session_id=session_id, request_id=turn_req_id, step_name="turn_start")
+    logger.info(
+        f"Starting conversational turn | lang={language or 'auto'} | provider={llm_provider or 'default'} | "
+        f"model={model_name or 'default'} | msg='{user_message[:100]}'"
+    )
 
     def make_step(node: str, title: str, description: str, detail: str = ""):
+        elapsed = round((time.time() - t_start) * 1000, 1)
         s = {
             "node": node,
             "title": title,
             "description": description,
             "detail": detail,
-            "elapsed_ms": round((time.time() - t_start) * 1000, 1),
+            "elapsed_ms": elapsed,
         }
         steps_log.append(s)
+        lvl = logging.WARNING if ("DIBLOKIR" in detail or "INVALID" in detail or "GAGAL" in detail) else logging.INFO
+        log_step_event(node=node, title=title, detail=detail, elapsed_ms=elapsed, level=lvl)
         if lf_trace:
             try:
                 span = lf_trace.span(
@@ -627,6 +641,12 @@ def stream_conversational_turn(
         "history": history[-10:],
     }
     session_store.save_session(session_id, save_data)
+    set_log_context(step_name="persist_session")
+    logger.info(
+        f"Completed conversational turn in {round((time.time() - t_start) * 1000, 1)}ms | "
+        f"specialist={plan_obj.specialist_agent if plan_obj else 'unknown'} | "
+        f"rows={len(rows)} | kpis={len(final_resp.kpis)}"
+    )
 
     # Langfuse Trace Final Update
     if lf_trace and lf_client:

@@ -11,6 +11,9 @@ Enforces:
 import re
 from typing import List, Set, Optional
 from backend.app.semantic.schema_registry import get_allowed_tables, get_allowed_columns_for_table
+from backend.app.core.logger import get_logger, log_security_event
+
+logger = get_logger("safety.sql_validator")
 
 DISALLOWED_KEYWORDS = {
     "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE",
@@ -32,6 +35,14 @@ class ValidationResult:
         self.is_valid = is_valid
         self.sanitized_sql = sanitized_sql
         self.errors = errors or []
+        if not is_valid and self.errors:
+            log_security_event(
+                event_type="SQL_AST_VALIDATION_REJECTED",
+                status="BLOCKED",
+                detail=f"Errors={self.errors} | SQL='{sanitized_sql[:120]}'",
+            )
+        elif is_valid:
+            logger.info(f"SQL AST validated & sanitized: '{' '.join(sanitized_sql.split())[:120]}'")
 
     def __repr__(self):
         return f"<ValidationResult valid={self.is_valid} errors={self.errors}>"

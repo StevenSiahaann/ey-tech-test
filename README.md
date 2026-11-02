@@ -1,9 +1,10 @@
 # Enterprise Conversational BI Agent (NLQ → SQL)
 
 [![Evaluation Harness](https://img.shields.io/badge/Evaluation%20Score-10%2F10%20(100%25)-success?style=for-the-badge&logo=checkmarx)](backend/eval/eval_harness.py)
-[![Unit & Multi-Turn Tests](https://img.shields.io/badge/Unit%20%26%20Context%20Tests-25%2F25%20Passed-success?style=for-the-badge)](backend/tests/)
+[![Unit & Multi-Turn Tests](https://img.shields.io/badge/Unit%20%26%20Context%20Tests-28%2F28%20Passed-success?style=for-the-badge)](backend/tests/)
 [![LangGraph](https://img.shields.io/badge/Orchestrator-Commander%20%2B%205%20Specialists-blue?style=for-the-badge)](backend/app/agent/graph.py)
-[![Database](https://img.shields.io/badge/Database-PostgreSQL%20%7C%20DuckDB-336791?style=for-the-badge&logo=postgresql)](db/seed/schema.sql)
+[![Database](https://img.shields.io/badge/Database-PostgreSQL%20%7C%20DuckDB-336791?style=for-the-badge&logo=postgresql)](db/01_schema.sql)
+[![Terraform Azure](https://img.shields.io/badge/IaC-Terraform%20Azure-7B42BC?style=for-the-badge&logo=terraform)](infra/terraform/)
 [![Frontend](https://img.shields.io/badge/UI%20Design-EY%20Digital%20Design%20System-ffe600?style=for-the-badge&labelColor=2e2e38)](frontend/)
 
 Enterprise-grade Conversational Business Intelligence (BI) and Analytical Advisory Agent that translates natural language questions (in Bahasa Indonesia and English) into safe, AST-validated, schema-aware PostgreSQL queries—while supporting proactive ambiguity confirmation, multi-turn context chaining, and interactive executive discussions.
@@ -14,17 +15,19 @@ Built for the **AI Engineer Technical Assessment**.
 
 ## Key Highlights & Verification Results
 
-- **10/10 Technical Scenarios Passed (100%) & 25/25 Unit Tests Passed:** Verified across all benchmark queries (ranking, multi-metric joins, time windows, anomaly detection, channel comparison, negation filters, proactive clarification, and multi-turn conversational context).
+- **10/10 Technical Scenarios Passed (100%) & 28/28 Unit Tests Passed:** Verified across all benchmark queries (ranking, multi-metric joins, time windows, anomaly detection, channel comparison, negation filters, proactive clarification, domain glossary discussion, structured log rotation, and multi-turn conversational context).
 - **Hierarchical Multi-Agent Architecture (Commander + 5 Specialized Sub-Agents):**
   1. **Commander & Contextual Query Rewriter (`plan_query`):** Performs deictic/anaphoric resolution, morphological normalization (`-nya` suffix handling), and rewrites follow-ups into self-contained `standalone_query` representations.
   2. **`ClarificationGuardSpecialist`:** Proactively intercepts 5 classes of ambiguity (*Scope Ambiguity on Follow-Up*, *KPI Metric Ambiguity*, *Incomplete Entity Fragment*, *Orphan Deictic Reference*, and *Domain Scope Guardrail*) and presents clickable confirmation chips instead of guessing.
-  3. **`ConversationalAdvisorSpecialist`:** Engages in interactive analytical discussions (e.g., *"Ini berarti apa artinya cancel rate?"*, *"Apa bedanya GMV sama Net Revenue?"*, *"Strategi apa supaya cancel rate turun?"*) grounded in active session numbers without re-running redundant SQL queries.
+  3. **`ConversationalAdvisorSpecialist`:** Engages in interactive analytical discussions (e.g., *"Ini berarti apa artinya cancel rate?"*, *"Saya pengen tau dulu definisi dari POS"*, *"Apa bedanya GMV sama Net Revenue?"*, *"Strategi apa supaya cancel rate turun?"*) grounded in active session numbers and a comprehensive domain glossary (`POS`, `FMCG`, `MTD`/`YTD`, `GMV`, `SKU`) plus dynamic LLM advisory synthesis.
   4. **`CatalogMetadataSpecialist`:** Handles master catalog counts and entity listings (5 product categories, 28 SKUs, 12 stores, 5 sales channels) over all-time scope.
   5. **`AnalyticalSQLSpecialist`:** Compiles and verifies complex multi-metric aggregations, rankings, comparisons, and negation filters (`!=`, `NOT IN`) with post-LLM semantic alignment enforcement.
   6. **`AnomalyDiagnosticSpecialist`:** Evaluates 7-day rolling window revenue drops (`>30%`) on `v_daily_revenue`.
 - **Hybrid Semantic Layer (Zero Metric Hallucination):** Pre-calculates GMV, Net Revenue, COGS, Gross Margin, and Cancel Rate deterministically at the database view level (`v_order_lines`, `v_orders`, `v_daily_revenue`).
 - **5 Balanced Retail Channels:** Synthetic dataset uniformly distributed across 5 omnichannel touchpoints (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`) at ~20% each.
-- **5-Layer Defense-in-Depth Guardrails:** Input regex/injection filter, `sqlglot` AST validation, table/column schema allowlist, outer `LIMIT 1000` cap, and PostgreSQL `bi_readonly` role with `statement_timeout = '10s'`.
+- **5-Layer Defense-in-Depth Guardrails:** Input credential/injection/DDL filter, `sqlglot` AST validation, table/column schema allowlist, outer `LIMIT 1000` cap, and PostgreSQL `bi_readonly` role with `statement_timeout = '10s'`.
+- **Structured Step-by-Step Logging & Dual Log Rotation (`backend/app/core/logger.py`):** Context-propagated (`session_id`, `request_id`, `step`) logging across every pipeline step with size-based rotation (`RotatingFileHandler`, 10 MB × 5 backups on `logs/agent_app.log`) and daily time-based rotation (`TimedRotatingFileHandler`, 30-day retention on `logs/security_audit.log`).
+- **Production Azure Infrastructure-as-Code (`infra/terraform/`):** Complete Terraform stack provisioning Azure Container Apps, Azure Database for PostgreSQL 16 Flexible Server (`pgvector`), Azure Cache for Redis, Azure OpenAI (`gpt-4o`), Azure Key Vault, Managed Identity, and Azure Log Analytics Workspace.
 - **Continuous Few-Shot Learning (Vector Store Promotion):** Users can rate answers with 👍 / 👎 in the UI (`/api/feedback`), automatically promoting verified NL-to-SQL pairs into the hybrid vector store and logging scores to Langfuse.
 - **Bilingual Interface (ID / EN) & Executive Dossier Generator:** One-click toggle between Bahasa Indonesia and English across all UI labels, KPI cards, charts, and print-ready HTML/PDF executive reports.
 
@@ -152,6 +155,18 @@ The repository includes a multi-stage `Dockerfile` that builds the React SPA (`f
 - **Minimum Required Environment Variable:** `GEMINI_API_KEY` (or Azure OpenAI credentials).
 - **Zero-Config Analytical Engine Fallback:** If `DATABASE_URL` (PostgreSQL) is not provisioned in the cloud environment, the container automatically initializes its embedded **DuckDB** analytical engine from the seeded CSV dataset and creates all 3 semantic views (`v_order_lines`, `v_orders`, `v_daily_revenue`) at startup.
 
+### Option 4: Enterprise Azure Provisioning with Terraform (`infra/terraform/`)
+Provision the full Azure enterprise topology (Azure Container Apps, Azure Database for PostgreSQL 16 Flexible Server with `pgvector`, Azure Cache for Redis, Azure OpenAI Service `gpt-4o`, Azure Key Vault, User-Assigned Managed Identity, and Azure Log Analytics Workspace):
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+See [infra/terraform/README.md](infra/terraform/README.md) for full Azure deployment details.
+
 ---
 
 ## Automated Evaluation & Verification
@@ -159,7 +174,7 @@ The repository includes a multi-stage `Dockerfile` that builds the React SPA (`f
 Run the automated test suites:
 
 ```bash
-# Run all 25 unit, multi-turn context, discussion, and guardrail red-team tests
+# Run all 28 unit, multi-turn context, discussion, logging, and guardrail red-team tests
 PYTHONPATH=. python3 -m unittest discover -s backend/tests -v
 
 # Run the 10 Technical Test scenarios automated evaluation harness
@@ -198,3 +213,4 @@ PYTHONPATH=. python3 backend/eval/eval_harness.py
 ## Documentation Links
 
 - **Architecture Deep-Dive:** [docs/architecture.md](docs/architecture.md)
+- **Azure Terraform IaC Guide:** [infra/terraform/README.md](infra/terraform/README.md)

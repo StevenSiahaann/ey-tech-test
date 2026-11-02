@@ -83,7 +83,13 @@ Rather than requiring the LLM to write error-prone raw joins across 5 base table
 - Engaging in an analytical discussion turn (`ConversationalAdvisorSpecialist`) preserves the active data context (`prev_plan` and `prev_result_digest`) so subsequent drill-downs (e.g., *"Breakdown per channel"*) seamlessly continue from the prior data query.
 - Clicking 👍 in the UI invokes `POST /api/feedback`, promoting the verified question-SQL pair into the hybrid vector store (`add_verified_example`) and recording the user satisfaction score in Langfuse.
 
-### 2.5 Cloud Portability (Render & Azure-Ready)
+### 2.5 Structured Step Logging & Dual Log Rotation (`backend/app/core/logger.py`)
+- **Correlation Context Propagation:** Uses Python `contextvars` to bind `session_id`, `request_id`, and `step_name` across FastAPI HTTP middleware and all 9 LangGraph execution steps.
+- **Size-Based Application Log Rotation (`RotatingFileHandler`):** Writes structured step telemetry (`elapsed_ms`, specialist routing, SQL compilation, and DB execution latency) to `logs/agent_app.log` with automatic rotation at `10 MB` and `5` retained archives.
+- **Daily Security Audit Log Rotation (`TimedRotatingFileHandler`):** Writes all guardrail interceptions (credential exfiltration, prompt injection, DDL/DML attempts, and `sqlglot` AST rejections) to `logs/security_audit.log`, rotating daily at midnight with `30` days of retention.
+
+### 2.6 Cloud Portability & Azure Terraform IaC (`infra/terraform/`)
 - **LLM Factory:** Switch between Google Gemini and Azure OpenAI at runtime via the UI selector or `LLM_PROVIDER`.
-- **Database Resilience:** Full compatibility with **PostgreSQL 16** (including Azure Database for PostgreSQL) plus automatic zero-config fallback to an embedded **DuckDB** analytical engine when `DATABASE_URL` is not configured.
+- **Database Resilience:** Full compatibility with **PostgreSQL 16** (including Azure Database for PostgreSQL Flexible Server) plus automatic zero-config fallback to an embedded **DuckDB** analytical engine when `DATABASE_URL` is not configured.
 - **Session Store:** Standard Redis commands compatible with **Azure Cache for Redis**, with zero-downtime fallback to an in-memory session store.
+- **Terraform Provisioning (`infra/terraform/`):** Declaratively provisions Azure Container Apps, Azure Container Registry, Azure Database for PostgreSQL 16 (`pgvector`), Azure Cache for Redis (TLS 1.2), Azure OpenAI (`gpt-4o`), Azure Key Vault, Managed Identity, and Azure Log Analytics Workspace.

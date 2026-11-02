@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     SQL_TIMEOUT_MS: int = 10000
     MAX_SQL_RETRIES: int = 2
 
+    # Logging & Log Rotation Configuration
+    LOG_LEVEL: str = "INFO"
+    LOG_DIR: str = "logs"
+    LOG_MAX_BYTES: int = 10 * 1024 * 1024  # 10 MB per log file before size-based rotation
+    LOG_BACKUP_COUNT: int = 5              # Keep 5 rotated application log archives
+    LOG_AUDIT_RETENTION_DAYS: int = 30     # Keep 30 days of daily rotated security audit logs
+
     model_config = SettingsConfigDict(
         env_file=(".env", "infra/.env"),
         env_file_encoding="utf-8",

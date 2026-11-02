@@ -10,9 +10,11 @@ from pydantic import BaseModel
 
 from backend.app.agent.graph import stream_conversational_turn, process_conversational_turn
 from backend.app.agent.state import AgentResponse
+from backend.app.core.logger import get_logger, get_log_rotation_status
 from backend.app.stores.redis_session import session_store
 from backend.app.semantic.schema_registry import ALLOWED_SCHEMAS
 
+logger = get_logger("api.routes")
 router = APIRouter(prefix="/api")
 
 
@@ -214,10 +216,11 @@ def submit_feedback(req: FeedbackRequest):
 
 @router.get("/health")
 def healthcheck():
-    """Service health status."""
+    """Service health status including log rotation diagnostics."""
     return {
         "status": "healthy",
         "service": "Conversational BI Agent",
         "semantic_layer": "active",
-        "guardrails": "enforced"
+        "guardrails": "enforced",
+        "logging": get_log_rotation_status(),
     }

@@ -16,7 +16,10 @@ from collections import Counter
 from datetime import timedelta
 from typing import List, Dict, Any, Optional
 from backend.app.core.config import settings
+from backend.app.core.logger import get_logger
 from backend.app.semantic.time_resolver import get_as_of_date
+
+logger = get_logger("stores.vector_client")
 
 # Stopwords excluded from similarity scoring so grammatical particles don't skew retrieval
 STOPWORDS = {
@@ -256,6 +259,7 @@ def add_verified_example(question: str, sql: str, intent: str = "metric_query") 
         "sql": sql.strip(),
         "assumptions": ["Verified via user feedback loop"]
     })
+    logger.info(f"Promoted verified NL-to-SQL pair to Vector Store (total learned={len(_learned_examples)}): '{question[:70]}'")
     return True
 
 

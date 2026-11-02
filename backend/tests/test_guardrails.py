@@ -99,6 +99,45 @@ class TestGuardrailsAndRedTeam(unittest.TestCase):
         self.assertEqual(r_dml.type, "refusal")
         self.assertIn("read-only", r_dml.summary.lower())
 
+    def test_structured_logging_and_log_rotation(self):
+        """
+        Verifies that structured step logging and dual log rotation handlers
+        (RotatingFileHandler on agent_app.log & TimedRotatingFileHandler on security_audit.log)
+        are initialized, active, and writing telemetry.
+        """
+        from backend.app.core.logger import get_log_rotation_status, log_step_event, log_security_event
+
+        log_step_event("unit_test_node", "Unit Test Step", "Testing step telemetry", 1.2)
+        log_security_event("UNIT_TEST_AUDIT", "VERIFIED", "Testing security audit rotation")
+        status = get_log_rotation_status()
+        self.assertTrue(status["app_log"]["exists"])
+        self.assertEqual(status["app_log"]["policy"], "RotatingFileHandler (size-based)")
+        self.assertTrue(status["security_audit_log"]["exists"])
+        self.assertEqual(status["security_audit_log"]["policy"], "TimedRotatingFileHandler (daily midnight)")
+
+    def test_terraform_azure_infrastructure_completeness(self):
+        """
+        Verifies that the Azure Terraform configuration files exist and declare all required
+        enterprise resources (Container Apps, PostgreSQL 16 Flexible Server, Redis, Azure OpenAI, Key Vault, Log Analytics).
+        """
+        from pathlib import Path
+
+        tf_dir = Path("infra/terraform")
+        for fname in ("versions.tf", "variables.tf", "main.tf", "outputs.tf", "terraform.tfvars.example", "README.md"):
+            self.assertTrue((tf_dir / fname).exists(), f"Missing Terraform file: {fname}")
+
+        main_tf = (tf_dir / "main.tf").read_text(encoding="utf-8")
+        for resource_type in (
+            "azurerm_resource_group",
+            "azurerm_log_analytics_workspace",
+            "azurerm_postgresql_flexible_server",
+            "azurerm_redis_cache",
+            "azurerm_cognitive_account",
+            "azurerm_key_vault",
+            "azurerm_container_app",
+        ):
+            self.assertIn(resource_type, main_tf)
+
 
 if __name__ == "__main__":
     unittest.main()
