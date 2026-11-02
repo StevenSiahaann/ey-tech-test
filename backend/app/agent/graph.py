@@ -206,8 +206,9 @@ def stream_conversational_turn(
         return {"type": "step", **s}
 
     # Step 1: Input Guardrail Check
-    guard_res = check_input_safety(user_message)
+    guard_res = check_input_safety(user_message, language=language)
     if not guard_res.is_safe:
+        is_en_guard = (language or "").lower() == "en"
         yield make_step(
             "guard_input",
             "Input Guardrails",
@@ -216,14 +217,46 @@ def stream_conversational_turn(
         )
         refusal_resp = AgentResponse(
             type="refusal",
-            language=language or "id",
+            language="en" if is_en_guard else "id",
             summary=guard_res.refusal_reason or "Permintaan tidak dapat diproses.",
-            insights=[
-                "Sistem hanya menerima pertanyaan analisis data relasional (read-only).",
-                guard_res.suggested_alternative
-                or "Silakan tanyakan metrik analitik seperti GMV, Revenue, atau Top Produk.",
+            insights=(
+                [
+                    "This system enforces multi-layered security guardrails (Read-Only role, credential isolation, and AST validation).",
+                    guard_res.suggested_alternative
+                    or "Please select one of the verified business analytics queries below:",
+                ]
+                if is_en_guard
+                else [
+                    "Sistem menerapkan pengamanan berlapis (mode Read-Only, isolasi kredensial, serta validasi AST SQL).",
+                    guard_res.suggested_alternative
+                    or "Silakan pilih salah satu analisis data bisnis yang tersedia di bawah ini:",
+                ]
+            ),
+            assumptions=[
+                "Security Guardrail Enforced: Blocked unauthorized credential, DDL/DML, or prompt-override request."
+                if is_en_guard
+                else "Pengamanan Berlapis Aktif: Menolak akses kredensial internal, modifikasi data (DDL/DML), atau injeksi instruksi."
             ],
-            assumptions=["Sistem menerapkan pengamanan berlapis terhadap instruksi modifikasi atau injeksi"],
+            clarification=ClarificationPayload(
+                question=(
+                    "Explore safe, verified business analytics queries instead:"
+                    if is_en_guard
+                    else "Jalankan salah satu analisis data bisnis resmi berikut:"
+                ),
+                options=(
+                    [
+                        {"label": "MTD GMV for Java Region", "value": "MTD GMV for Java region?"},
+                        {"label": "Top 5 Products by Revenue Last Month", "value": "Top 5 products by revenue last month?"},
+                        {"label": "Cancel Rate This Month", "value": "Cancel rate this month?"},
+                    ]
+                    if is_en_guard
+                    else [
+                        {"label": "GMV MTD untuk Region Jawa", "value": "GMV MTD untuk region Jawa?"},
+                        {"label": "Top 5 Produk Revenue Tertinggi Bulan Lalu", "value": "Top 5 produk berdasarkan revenue bulan lalu?"},
+                        {"label": "Cancel Rate Bulan Ini", "value": "Cancel rate bulan ini?"},
+                    ]
+                ),
+            ),
             trace={"steps": steps_log, "total_duration_ms": round((time.time() - t_start) * 1000, 1)},
         )
         if lf_trace and lf_client:

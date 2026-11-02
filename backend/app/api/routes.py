@@ -108,20 +108,30 @@ def chat_endpoint(req: ChatRequest):
         return resp.model_dump()
 
     def event_generator():
-        for event in stream_conversational_turn(
-            req.session_id, 
-            req.message,
-            llm_provider=req.llm_provider,
-            model_name=req.model_name,
-            language=req.language
-        ):
-            ev_type = event.get("type")
-            if ev_type == "step":
-                yield f"event: step\ndata: {json.dumps(event)}\n\n"
-            elif ev_type in ("answer", "refusal", "error"):
-                payload = event.get("payload")
-                dumped = payload.model_dump() if hasattr(payload, "model_dump") else payload
-                yield f"event: {ev_type}\ndata: {json.dumps(dumped)}\n\n"
+        try:
+            for event in stream_conversational_turn(
+                req.session_id, 
+                req.message,
+                llm_provider=req.llm_provider,
+                model_name=req.model_name,
+                language=req.language
+            ):
+                ev_type = event.get("type")
+                if ev_type == "step":
+                    yield f"event: step\ndata: {json.dumps(event)}\n\n"
+                elif ev_type in ("answer", "refusal", "error"):
+                    payload = event.get("payload")
+                    dumped = payload.model_dump() if hasattr(payload, "model_dump") else payload
+                    yield f"event: {ev_type}\ndata: {json.dumps(dumped)}\n\n"
+        except Exception as e:
+            err_payload = {
+                "type": "error",
+                "language": req.language or "id",
+                "summary": f"Terjadi kesalahan pemrosesan: {str(e)[:120]}",
+                "insights": ["Permintaan tidak dapat diselesaikan karena kendala internal.", "Silakan muat ulang atau coba pertanyaan lain."],
+                "assumptions": []
+            }
+            yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
 
     return StreamingResponse(
         event_generator(),
