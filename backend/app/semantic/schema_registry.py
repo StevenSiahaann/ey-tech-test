@@ -3,11 +3,62 @@ Schema Registry and Allowlist for Conversational BI Agent.
 Used by Prompt Generators and SQL AST Validators to ensure strict schema compliance.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Set, Any
+from typing import Dict, List, Set, Any, Optional
 
 _METRICS_YAML_PATH = Path(__file__).resolve().parent / "metrics.yaml"
 _CACHED_METRICS_REGISTRY: Dict[str, Any] = {}
+
+
+@dataclass(frozen=True)
+class MetricContract:
+    name: str
+    sql_expr: str
+    output_alias: str
+    source_view: str
+    default_sort: str = "DESC"
+
+
+METRIC_CONTRACTS: Dict[str, MetricContract] = {
+    "gmv": MetricContract("gmv", "SUM(gmv)", "total_gmv", "v_order_lines"),
+    "revenue": MetricContract("revenue", "SUM(revenue)", "total_revenue", "v_order_lines"),
+    "margin": MetricContract("margin", "SUM(margin)", "total_margin", "v_order_lines"),
+    "margin_pct": MetricContract("margin_pct", "ROUND((SUM(margin)::numeric / NULLIF(SUM(revenue), 0)::numeric) * 100, 2)", "margin_pct", "v_order_lines"),
+    "cogs": MetricContract("cogs", "SUM(cogs)", "total_cogs", "v_order_lines"),
+    "aov": MetricContract("aov", "ROUND((SUM(order_revenue)::numeric / NULLIF(SUM(is_completed), 0)::numeric), 2)", "aov", "v_orders"),
+    "cancel_rate": MetricContract("cancel_rate", "ROUND((COUNT(CASE WHEN status = 'Cancelled' THEN 1 END)::numeric / NULLIF(COUNT(*), 0)::numeric) * 100, 2)", "cancel_rate_pct", "v_orders"),
+    "order_count": MetricContract("order_count", "COUNT(DISTINCT order_id)", "total_orders", "v_orders"),
+    "category_count": MetricContract("category_count", "COUNT(DISTINCT product_category)", "total_categories", "v_order_lines"),
+    "product_count": MetricContract("product_count", "COUNT(DISTINCT product_id)", "total_products", "v_order_lines"),
+    "store_count": MetricContract("store_count", "COUNT(DISTINCT store_id)", "total_stores", "v_order_lines"),
+    "channel_count": MetricContract("channel_count", "COUNT(DISTINCT channel)", "total_channels", "v_order_lines"),
+}
+
+
+def get_metric_contract(metric_name: str) -> Optional[MetricContract]:
+    return METRIC_CONTRACTS.get(metric_name)
+
+
+def resolve_primary_sort_alias(metrics: List[str]) -> str:
+    """Returns the canonical output alias for the primary metric in the query."""
+    if not metrics:
+        return "total_revenue"
+    primary = metrics[0]
+    contract = METRIC_CONTRACTS.get(primary)
+    if contract:
+        return contract.output_alias
+    return "total_revenue"
+
+
+def reconcile_olap_breakdown_filters(filters: List[Any], dimensions: List[str]) -> List[Any]:
+    """
+    OLAP Invariant: A dimension being broken down / grouped cannot be restricted by an equality filter
+    on the exact same dimension (e.g. breakdown per 'store_region' clears any 'store_region = Jawa' filter).
+    Hierarchical drill-downs (e.g. breakdown per 'store_city' while 'store_region = Jawa' is active) are preserved.
+    """
+    grouping_dims = set(dimensions)
+    return [f for f in filters if getattr(f, "field", None) not in grouping_dims]
 
 
 def get_metrics_registry() -> Dict[str, Any]:

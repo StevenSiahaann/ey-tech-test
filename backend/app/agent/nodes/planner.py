@@ -18,6 +18,10 @@ from backend.app.semantic.dimension_catalog import (
     detect_unresolved_location_mention,
     get_dimension_catalog,
 )
+from backend.app.semantic.schema_registry import (
+    resolve_primary_sort_alias,
+    reconcile_olap_breakdown_filters,
+)
 from backend.app.safety.sql_validator import validate_and_sanitize_sql, escape_sql_literal
 from backend.app.stores.pg_executor import execute_readonly_sql
 
@@ -447,7 +451,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
 
     # 4. Check for Genuine Conversational Context Chaining (Follow-Up)
     is_breakdown_followup = bool(re.search(
-        r'\b(?:breakdown|rincian|per\s+kota|per\s+city|by\s+city|berdasarkan\s+kota|per\s+kategori|per\s+category|per\s+channel|per\s+region)\b',
+        r'\b(?:breakdown|rincian|per\s+kota|per\s+city|by\s+city|berdasarkan\s+kota|per\s+kategori|per\s+category|per\s+channel|per\s+region|per\s+wilayah|per\s+daerah|by\s+region)\b',
         msg_lower
     )) and len(msg_lower.split()) <= 7
 
@@ -532,9 +536,11 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
         plan.is_follow_up = True
 
         # Merge previous filters that were not overridden by current turn
+        # Apply OLAP Invariant: Do not inherit an equality filter on a dimension being grouped in this turn
         current_fields = {f.field for f in plan.filters}
+        grouping_dims = set(plan.dimensions)
         for pf in prev_plan.filters:
-            if pf.field not in current_fields:
+            if pf.field not in current_fields and pf.field not in grouping_dims:
                 plan.filters.append(pf)
         if prev_plan.filters:
             plan.inherited_fields.append("filters")
@@ -624,7 +630,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
             plan.sort_direction = prev_plan.sort_direction or "DESC"
             return _finalize_commander_plan(msg, plan, lang, f"Planned (Follow-up Entity Attribute: {', '.join(plan.dimensions)})")
 
-        # CASE C: Breakdown Follow-up ("Breakdown per city")
+        # CASE C: Breakdown Follow-up ("Breakdown per city", "kalau per region gimana?")
         if is_breakdown_followup:
             plan.intent = "breakdown"
             if "kategori" in msg_lower or "category" in msg_lower:
@@ -637,7 +643,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
                 plan.dimensions = ["product_brand"]
             elif "segmen" in msg_lower or "segment" in msg_lower:
                 plan.dimensions = ["customer_segment"]
-            elif "region" in msg_lower or "wilayah" in msg_lower:
+            elif "region" in msg_lower or "wilayah" in msg_lower or "daerah" in msg_lower:
                 plan.dimensions = ["store_region"]
             else:
                 plan.dimensions = ["store_city"]
@@ -646,7 +652,10 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
                 plan.inherited_fields.append("metrics")
             if not plan.metrics:
                 plan.metrics = ["revenue", "margin"]
-            plan.sort_by = "total_revenue"
+            # Apply OLAP Invariant: clear equality filters on the target grouping dimension
+            plan.filters = reconcile_olap_breakdown_filters(plan.filters, plan.dimensions)
+            # Reconcile sort column dynamically from active semantic metric contract
+            plan.sort_by = resolve_primary_sort_alias(plan.metrics)
             plan.sort_direction = "DESC"
             return _finalize_commander_plan(msg, plan, lang, f"Planned (Follow-up: Breakdown per {plan.dimensions[0]})")
 

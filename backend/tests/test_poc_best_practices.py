@@ -154,6 +154,28 @@ class TestPoCBestPractices(unittest.TestCase):
         self.assertIsNone(r_hi.sql)
         self.assertIn("halo", r_hi.summary.lower())
 
+    def test_olap_breakdown_followup_and_sort_reconciliation(self):
+        """Verifies OLAP invariant (clearing equality filter on grouping dimension) and Projection-to-Order sort reconciliation."""
+        sid = "test-olap-flow-session"
+        session_store.clear_session(sid)
+
+        # Turn 1: GMV for Java Region (filtered)
+        r1 = process_conversational_turn(sid, "MTD GMV for Java region?", language="id")
+        self.assertEqual(r1.type, "answer")
+        self.assertIn("total_gmv", r1.sql.lower())
+        self.assertIn("store_region = 'jawa'", r1.sql.lower())
+
+        # Turn 2: Breakdown per region ('kalau per region gimana?')
+        r2 = process_conversational_turn(sid, "kalau per region gimana?", language="id")
+        self.assertEqual(r2.type, "answer")
+        self.assertIsNotNone(r2.sql)
+        sql_lower = r2.sql.lower()
+        self.assertIn("total_gmv", sql_lower)
+        self.assertIn("order by total_gmv desc", sql_lower)
+        self.assertNotIn("total_revenue", sql_lower)
+        self.assertNotIn("store_region = 'jawa'", sql_lower)
+        self.assertEqual(len(r2.table.rows), 5, "Breakdown per region must return all 5 active regions")
+
     def test_sql_validator_cte_column_check_and_function_guard(self):
         """Verifies CTE queries cannot bypass column allowlist validation."""
         bad_cte = """

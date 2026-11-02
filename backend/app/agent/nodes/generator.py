@@ -5,6 +5,7 @@ Structured QueryPlan, and AST Self-Correction Feedback) with a complete determin
 Semantic Plan-to-SQL Compiler fallback.
 """
 
+import re
 from pathlib import Path
 from typing import Dict, Any, List
 from backend.app.agent.state import AgentState, QueryPlan
@@ -191,9 +192,22 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
     dim_select = f"{', '.join(dims)}, " if dims else ""
     group_str = f" GROUP BY {', '.join(dims)}" if dims else ""
 
-    # Determine ORDER BY
-    sort_col = plan.sort_by or ("total_margin" if "margin" in plan.metrics and "revenue" not in plan.metrics else ("total_gmv" if "gmv" in plan.metrics and "revenue" not in plan.metrics else "total_revenue"))
+    # Determine ORDER BY (Projection-to-Order Reconciliation via Semantic Registry)
+    from backend.app.semantic.schema_registry import resolve_primary_sort_alias
+    primary_sort_alias = resolve_primary_sort_alias(plan.metrics)
+    sort_col = plan.sort_by or primary_sort_alias
     sort_dir = plan.sort_direction or "DESC"
+
+    # Extract all projected metric aliases from metric_exprs
+    projected_aliases = []
+    for expr in metric_exprs:
+        m = re.search(r'\bAS\s+([a-zA-Z0-9_]+)\b', expr, re.IGNORECASE)
+        if m:
+            projected_aliases.append(m.group(1))
+
+    # Guardrail: Ensure sort_col exists in the projected metric aliases or selected dimensions
+    if projected_aliases and sort_col not in projected_aliases and sort_col not in dims:
+        sort_col = projected_aliases[0]
 
     order_str = ""
     if len(dims) > 0 or plan.intent in ("ranking", "comparison", "breakdown") or plan.limit:
