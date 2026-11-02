@@ -33,12 +33,17 @@ def _extract_views_from_sql(sql: str) -> str:
 
 
 def _retrieve_node(state: AgentState) -> Dict[str, Any]:
-    """LangGraph node for hybrid semantic few-shot retrieval."""
-    user_msg = state.get("user_message", "")
-    few_shots = retrieve_few_shots(user_msg, top_k=3)
+    """LangGraph node for hybrid semantic few-shot retrieval using Commander's standalone query."""
+    plan_obj = state.get("plan")
+    search_query = (
+        plan_obj.standalone_query
+        if (plan_obj and plan_obj.standalone_query)
+        else state.get("user_message", "")
+    )
+    few_shots = retrieve_few_shots(search_query, top_k=3)
     return {
         "few_shots": few_shots,
-        "current_step": f"Retrieved {len(few_shots)} relevant few-shot SQL templates"
+        "current_step": f"Retrieved {len(few_shots)} relevant few-shot SQL templates for '{search_query[:60]}'"
     }
 
 
@@ -259,7 +264,7 @@ def stream_conversational_turn(
         "model_name": model_name,
     }
 
-    # Step 3: Intent Understanding & Semantic Planning
+    # Step 3: Commander Routing, Contextual Query Rewriting & Semantic Planning
     plan_out = plan_query(state)
     state.update(plan_out)
     plan_obj = state.get("plan")
@@ -279,18 +284,29 @@ def stream_conversational_turn(
             if plan_obj.is_follow_up
             else ""
         )
+        win_range = (
+            f"({plan_obj.start_date}..{plan_obj.end_date})"
+            if (plan_obj.start_date and plan_obj.end_date)
+            else "(All-Time)"
+        )
+        rewritten_str = (
+            f" | Rewritten: '{plan_obj.standalone_query}'"
+            if (plan_obj.standalone_query and plan_obj.standalone_query != user_message)
+            else ""
+        )
         intent_desc = (
-            f"Intent: {plan_obj.intent} | Metrics: [{metrics_str}] | GroupBy: [{dims_str}] | "
+            f"Specialist: {plan_obj.specialist_agent} | Intent: {plan_obj.intent} | "
+            f"Metrics: [{metrics_str}] | GroupBy: [{dims_str}] | "
             f"Filters: [{filters_str}] | Window: {plan_obj.time_window_label} "
-            f"({plan_obj.start_date}..{plan_obj.end_date}){followup_str}"
+            f"{win_range}{followup_str}{rewritten_str}"
         )
     else:
         intent_desc = "Query Plan tersusun"
 
     yield make_step(
         "plan",
-        "Intent & Semantic Planning",
-        "Menganalisis intent, metrik, dimensi, filter, dan periode waktu",
+        "Commander & Semantic Planner",
+        "Melakukan contextual query rewriting, menentukan sub-agent spesialis, metrik, dimensi, dan periode waktu",
         intent_desc,
     )
 
@@ -413,6 +429,7 @@ def stream_conversational_turn(
 
     # Step 5, 6, 7: SQL Generation -> AST Validation -> DB Execution (with Self-Correction Retry Loop)
     max_retries = 2
+    specialist_name = plan_obj.specialist_agent if plan_obj else "AnalyticalSQLSpecialist"
     while True:
         attempt = state.get("retry_count", 0) + 1
         gen_out = generate_sql(state)
@@ -422,8 +439,8 @@ def stream_conversational_turn(
         sql_preview = " ".join(raw_sql.split())[:110]
         yield make_step(
             "generate_sql" if attempt == 1 else f"retry_sql_{attempt - 1}",
-            "Semantic SQL Compilation" if attempt == 1 else f"Self-Correction SQL Retry #{attempt - 1}",
-            "Menghasilkan query PostgreSQL berdasarkan QueryPlan & Semantic Views"
+            f"{specialist_name}: SQL Compilation" if attempt == 1 else f"{specialist_name}: Self-Correction Retry #{attempt - 1}",
+            f"Sub-agent {specialist_name} menyusun query PostgreSQL di atas Semantic Views"
             if attempt == 1
             else "Memperbaiki query SQL berdasarkan umpan balik error AST/Database",
             f"View: {used_views} | SQL: {sql_preview}...",

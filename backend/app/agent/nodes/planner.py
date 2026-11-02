@@ -73,15 +73,83 @@ def _resolve_top_city_dynamically(filters: List[FilterItem], start_date: str, en
         if f.field != "store_city":
             if f.operator == "=":
                 where_clauses.append(f"{f.field} = '{f.value}'")
+            elif f.operator == "!=":
+                where_clauses.append(f"{f.field} != '{f.value}'")
             elif f.operator == "IN" and isinstance(f.value, list):
                 vals = ", ".join(f"'{v}'" for v in f.value)
                 where_clauses.append(f"{f.field} IN ({vals})")
+            elif f.operator == "NOT IN" and isinstance(f.value, list):
+                vals = ", ".join(f"'{v}'" for v in f.value)
+                where_clauses.append(f"{f.field} NOT IN ({vals})")
     where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     sql = f"SELECT store_city, SUM(revenue) AS total_revenue FROM v_order_lines{where_sql} GROUP BY store_city ORDER BY total_revenue DESC LIMIT 1;"
     res = execute_readonly_sql(sql)
     if res.success and res.rows:
         return res.rows[0].get("store_city")
     return None
+
+
+def _assign_specialist_agent(plan: QueryPlan) -> str:
+    """
+    Commander Specialist Router:
+    Assigns the specialized sub-agent responsible for executing the resolved QueryPlan.
+    """
+    if plan.intent in ("out_of_scope", "clarification_reply") or plan.needs_clarification:
+        return "ClarificationGuardSpecialist"
+    if plan.intent == "anomaly":
+        return "AnomalyDiagnosticSpecialist"
+    if plan.intent == "exploratory" or any(
+        m in plan.metrics for m in ("category_count", "product_count", "store_count", "channel_count")
+    ):
+        return "CatalogMetadataSpecialist"
+    return "AnalyticalSQLSpecialist"
+
+
+def _build_standalone_query(msg: str, plan: QueryPlan, lang: str) -> str:
+    """
+    Commander Contextual Query Rewriter:
+    Synthesizes a self-contained, unambiguous analytical query when the user message
+    is a follow-up, anaphoric reference ('apa aja?', 'Breakdown per city'), or catalog inquiry.
+    Used for accurate Vector DB Few-Shot Retrieval and Specialist SQL Generation.
+    """
+    if plan.intent in ("out_of_scope", "clarification_reply") or plan.needs_clarification:
+        return msg
+
+    if plan.intent == "exploratory" and plan.dimensions == ["product_category"] and "product_count" in plan.metrics:
+        return (
+            "List of all product categories and total products per category"
+            if lang == "en"
+            else "Daftar seluruh kategori produk beserta jumlah produk per kategori"
+        )
+
+    if plan.is_follow_up or len(msg.split()) <= 4:
+        if plan.intent == "exploratory":
+            dims_txt = ", ".join(plan.dimensions) if plan.dimensions else "product_name"
+            return f"List distinct {dims_txt}" if lang == "en" else f"Daftar unik {dims_txt}"
+
+        metrics_txt = ", ".join(plan.metrics) if plan.metrics else "revenue"
+        dims_txt = f" per {', '.join(plan.dimensions)}" if plan.dimensions else ""
+        filters_txt = (
+            f" ({', '.join(f'{f.field} {f.operator} {f.value}' for f in plan.filters)})"
+            if plan.filters
+            else ""
+        )
+        top_txt = f"Top {plan.limit} " if plan.limit else ""
+        win_txt = f" [{plan.time_window_label}]" if plan.start_date else ""
+        return f"{top_txt}{metrics_txt}{dims_txt}{filters_txt}{win_txt}".strip()
+
+    return msg
+
+
+def _finalize_commander_plan(msg: str, plan: QueryPlan, lang: str, step_desc: str) -> Dict[str, Any]:
+    """Finalizes Commander routing metadata (`specialist_agent` and `standalone_query`) on the QueryPlan."""
+    plan.specialist_agent = _assign_specialist_agent(plan)
+    plan.standalone_query = _build_standalone_query(msg, plan, lang)
+    return {
+        "plan": plan,
+        "language": lang,
+        "current_step": f"{step_desc} -> Specialist: {plan.specialist_agent}",
+    }
 
 
 def _infer_subject_dimensions_from_plan(prev_plan: QueryPlan) -> List[str]:
@@ -262,7 +330,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
                     plan.intent = prev_plan.intent if prev_plan.intent != "clarification_reply" else "exploratory"
                     plan.metrics = list(prev_plan.metrics)
                     plan.limit = None
-                return {"plan": plan, "language": lang, "current_step": f"Planned (Follow-up List: {', '.join(plan.dimensions)})"}
+                return _finalize_commander_plan(msg, plan, lang, f"Planned (Follow-up List: {', '.join(plan.dimensions)})")
 
         # CASE B: Entity Attribute Follow-up (e.g. "ini produknya di kategori apa?" after "Top 5 produk bulan lalu?")
         if is_entity_attribute_followup:
@@ -308,7 +376,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
                 plan.metrics = [m for m in prev_plan.metrics if not m.endswith("_count")] or ["revenue"]
             plan.sort_by = prev_plan.sort_by or "total_revenue"
             plan.sort_direction = prev_plan.sort_direction or "DESC"
-            return {"plan": plan, "language": lang, "current_step": f"Planned (Follow-up Entity Attribute: {', '.join(plan.dimensions)})"}
+            return _finalize_commander_plan(msg, plan, lang, f"Planned (Follow-up Entity Attribute: {', '.join(plan.dimensions)})")
 
         # CASE C: Breakdown Follow-up ("Breakdown per city")
         if is_breakdown_followup:
@@ -328,7 +396,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
                 plan.metrics = ["revenue", "margin"]
             plan.sort_by = "total_revenue"
             plan.sort_direction = "DESC"
-            return {"plan": plan, "language": lang, "current_step": f"Planned (Follow-up: Breakdown per {plan.dimensions[0]})"}
+            return _finalize_commander_plan(msg, plan, lang, f"Planned (Follow-up: Breakdown per {plan.dimensions[0]})")
 
         # CASE D: Top Store in Top City Follow-up ("Top 3 store dari city tertinggi")
         if is_top_store_followup:
@@ -349,7 +417,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
             if top_city:
                 plan.filters = [f for f in plan.filters if f.field != "store_city"]
                 plan.filters.append(FilterItem(field="store_city", operator="=", value=top_city))
-            return {"plan": plan, "language": lang, "current_step": f"Planned (Follow-up: Top {plan.limit} store in {top_city or 'top city'})"}
+            return _finalize_commander_plan(msg, plan, lang, f"Planned (Follow-up: Top {plan.limit} store in {top_city or 'top city'})")
 
         # CASE E: General Anaphoric Follow-up (only inherit dimensions/metrics if current turn didn't set a specific exploratory/catalog intent)
         if plan.intent not in ("exploratory", "anomaly", "tiering"):
@@ -385,7 +453,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
 
     if any(term in msg_lower for term in OUT_OF_SCOPE_TERMS) and not has_business_intent:
         plan.intent = "out_of_scope"
-        return {"plan": plan, "language": lang, "current_step": "Out of Scope (Domain Scope Guardrail)"}
+        return _finalize_commander_plan(msg, plan, lang, "Out of Scope (Domain Scope Guardrail)")
 
     # 6. Ambiguity Gatekeeper: Proactive Clarification Loop
     words = msg_lower.split()
@@ -414,9 +482,9 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
                 {"label": "Top 5 Produk Berdasarkan Revenue Bulan Lalu", "value": "Top 5 produk berdasarkan revenue bulan lalu?"},
                 {"label": "Revenue & Margin FMCG Jawa", "value": "Revenue dan margin MTD untuk FMCG di Jawa?"}
             ]
-        return {"plan": plan, "language": lang, "current_step": "Needs Clarification (Proactive Disambiguation)"}
+        return _finalize_commander_plan(msg, plan, lang, "Needs Clarification (Proactive Disambiguation)")
 
-    return {"plan": plan, "language": lang, "current_step": f"Planned (Intent: {plan.intent}, Window: {plan.time_window_label})"}
+    return _finalize_commander_plan(msg, plan, lang, f"Planned (Intent: {plan.intent}, Window: {plan.time_window_label})")
 
 
 def _detect_metrics_and_intent(
@@ -553,7 +621,7 @@ def _detect_metrics_and_intent(
         plan.dimensions = ["product_category"]
     elif "cancel_rate" not in plan.metrics and not any(m.endswith("_count") for m in plan.metrics):
         for f in plan.filters:
-            if f.field not in plan.dimensions:
+            if f.operator in ("=", "IN") and f.field not in plan.dimensions:
                 plan.dimensions.append(f.field)
 
     # 8. Detect Comparison vs Ranking vs Breakdown vs Metric Query

@@ -27,6 +27,8 @@ class QueryPlan(BaseModel):
     limit: Optional[int] = None
     is_follow_up: bool = False
     inherited_fields: List[str] = Field(default_factory=list)
+    standalone_query: Optional[str] = None
+    specialist_agent: str = "AnalyticalSQLSpecialist"
     needs_clarification: bool = False
     clarification_question: Optional[str] = None
     clarification_options: List[Dict[str, str]] = Field(default_factory=list)

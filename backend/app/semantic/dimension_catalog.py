@@ -137,12 +137,26 @@ def get_dimension_catalog(force_refresh: bool = False) -> Dict[str, List[str]]:
     return _catalog_cache
 
 
+_NEGATION_CLAUSE_RE = re.compile(
+    r'\b(?:selain|kecuali|bukan|di\s+luar|tanpa|tidak\s+termasuk|exclude|excluding|except|other\s+than|not\s+in)\b'
+    r'(?!.*\b(?:untuk|pada|di\s+(?!luar)|for|in|with)\b)'
+)
+
+
+def _is_negated_at(msg_lower: str, match_start: int) -> bool:
+    """Checks whether the entity match at `match_start` falls inside an active negation clause."""
+    prefix = msg_lower[max(0, match_start - 55):match_start]
+    return bool(_NEGATION_CLAUSE_RE.search(prefix))
+
+
 def extract_dimension_filters(message: str) -> List[FilterItem]:
     """
     Extracts canonical FilterItems from user message using the dynamic dimension catalog.
-    Supports multi-value matching per field:
-    - Single match -> FilterItem(field=..., operator="=", value="...")
-    - Multiple matches -> FilterItem(field=..., operator="IN", value=["...", "..."])
+    Supports both inclusion ('=', 'IN') and negation/exclusion ('!=', 'NOT IN'):
+    - Single positive match -> FilterItem(field=..., operator="=", value="...")
+    - Multiple positive matches -> FilterItem(field=..., operator="IN", value=["...", "..."])
+    - Single negated match ("selain Jawa", "except FMCG") -> FilterItem(field=..., operator="!=", value="...")
+    - Multiple negated matches -> FilterItem(field=..., operator="NOT IN", value=["...", "..."])
     Preserves order of appearance in the user's message.
     """
     catalog = get_dimension_catalog()
@@ -150,7 +164,7 @@ def extract_dimension_filters(message: str) -> List[FilterItem]:
     filters: List[FilterItem] = []
 
     for field, values in catalog.items():
-        found_with_pos: List[tuple[int, str]] = []
+        found_with_pos: List[tuple[int, str, bool]] = []
         seen_canonical: Set[str] = set()
 
         # 1. Check canonical values from DB (longest first to avoid partial overlap like Bali vs Bali & Nusa Tenggara)
@@ -159,7 +173,7 @@ def extract_dimension_filters(message: str) -> List[FilterItem]:
             pattern = r'(?<![a-z0-9])' + re.escape(val.lower()) + r'(?![a-z0-9])'
             m = re.search(pattern, msg_lower)
             if m and val not in seen_canonical:
-                found_with_pos.append((m.start(), val))
+                found_with_pos.append((m.start(), val, _is_negated_at(msg_lower, m.start())))
                 seen_canonical.add(val)
 
         # 2. Check bilingual/colloquial aliases
@@ -170,16 +184,25 @@ def extract_dimension_filters(message: str) -> List[FilterItem]:
             pattern = r'(?<![a-z0-9])' + re.escape(alias.lower()) + r'(?![a-z0-9])'
             m = re.search(pattern, msg_lower)
             if m:
-                found_with_pos.append((m.start(), canonical_val))
+                found_with_pos.append((m.start(), canonical_val, _is_negated_at(msg_lower, m.start())))
                 seen_canonical.add(canonical_val)
 
         if found_with_pos:
             # Sort by appearance position in user query
             found_with_pos.sort(key=lambda x: x[0])
-            ordered_vals = [v for _, v in found_with_pos]
-            if len(ordered_vals) == 1:
-                filters.append(FilterItem(field=field, operator="=", value=ordered_vals[0]))
-            else:
-                filters.append(FilterItem(field=field, operator="IN", value=ordered_vals))
+            pos_vals = [v for _, v, is_neg in found_with_pos if not is_neg]
+            neg_vals = [v for _, v, is_neg in found_with_pos if is_neg]
+
+            if pos_vals:
+                if len(pos_vals) == 1:
+                    filters.append(FilterItem(field=field, operator="=", value=pos_vals[0]))
+                else:
+                    filters.append(FilterItem(field=field, operator="IN", value=pos_vals))
+
+            if neg_vals:
+                if len(neg_vals) == 1:
+                    filters.append(FilterItem(field=field, operator="!=", value=neg_vals[0]))
+                else:
+                    filters.append(FilterItem(field=field, operator="NOT IN", value=neg_vals))
 
     return filters

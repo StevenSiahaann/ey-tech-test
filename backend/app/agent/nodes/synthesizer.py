@@ -26,12 +26,18 @@ def format_idr(value: float, lang: str = "id") -> str:
 
 
 def _describe_active_filters(plan: QueryPlan, lang: str = "id") -> str:
-    """Builds a human-readable description of active dimension filters from QueryPlan."""
+    """Builds a human-readable description of active dimension filters (including negation) from QueryPlan."""
     if not plan or not plan.filters:
         return ""
     parts = []
+    neg_prefix = "Excluding " if lang == "en" else "Selain "
     for f in plan.filters:
-        if isinstance(f.value, list):
+        op = str(f.operator).upper().strip()
+        if op == "NOT IN" and isinstance(f.value, list):
+            parts.append(f"{neg_prefix}{', '.join(str(v) for v in f.value)}")
+        elif op in ("!=", "NOT_EQUALS", "NEQ"):
+            parts.append(f"{neg_prefix}{f.value}")
+        elif isinstance(f.value, list):
             parts.append(" vs ".join(str(v) for v in f.value))
         else:
             parts.append(str(f.value))

@@ -5,11 +5,43 @@ Structured QueryPlan, and AST Self-Correction Feedback) with a complete determin
 Semantic Plan-to-SQL Compiler fallback.
 """
 
+from pathlib import Path
 from typing import Dict, Any, List
 from backend.app.agent.state import AgentState, QueryPlan
 from backend.app.core.llm_factory import get_llm, get_langfuse_callback
 from backend.app.semantic.schema_registry import get_schema_prompt_text
 from backend.app.stores.vector_client import retrieve_few_shots
+
+_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "sql_gen_prompt.md"
+_CACHED_SYSTEM_HEADER: str = ""
+
+
+def _get_system_prompt_header() -> str:
+    """Loads the base system prompt header from `prompts/sql_gen_prompt.md`."""
+    global _CACHED_SYSTEM_HEADER
+    if not _CACHED_SYSTEM_HEADER:
+        try:
+            _CACHED_SYSTEM_HEADER = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+        except Exception:
+            _CACHED_SYSTEM_HEADER = (
+                "Anda adalah Senior Database Architect PostgreSQL untuk Enterprise Conversational BI.\n"
+                "Tugas Anda adalah menghasilkan HANYA kode query SQL SELECT PostgreSQL tunggal yang akurat, aman, dan berkinerja tinggi."
+            )
+    return _CACHED_SYSTEM_HEADER
+
+
+def _format_filter_clause(f) -> str:
+    """Formats a single FilterItem (`=`, `!=`, `IN`, `NOT IN`) into a valid SQL predicate."""
+    op = str(f.operator).upper().strip()
+    if op == "IN" and isinstance(f.value, list):
+        vals = ", ".join(f"'{v}'" for v in f.value)
+        return f"{f.field} IN ({vals})"
+    if op == "NOT IN" and isinstance(f.value, list):
+        vals = ", ".join(f"'{v}'" for v in f.value)
+        return f"{f.field} NOT IN ({vals})"
+    if op in ("!=", "NOT_EQUALS", "NEQ"):
+        return f"{f.field} != '{f.value}'"
+    return f"{f.field} = '{f.value}'"
 
 
 def compile_sql_from_plan(plan: QueryPlan) -> str:
@@ -27,14 +59,7 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
         where_parts.append(f"order_date >= '{plan.start_date}' AND order_date <= '{plan.end_date}'")
 
     for f in plan.filters:
-        op = str(f.operator).upper().strip()
-        if op == "IN" and isinstance(f.value, list):
-            vals = ", ".join(f"'{v}'" for v in f.value)
-            where_parts.append(f"{f.field} IN ({vals})")
-        elif op in ("!=", "NOT_EQUALS", "NEQ"):
-            where_parts.append(f"{f.field} != '{f.value}'")
-        else:
-            where_parts.append(f"{f.field} = '{f.value}'")
+        where_parts.append(_format_filter_clause(f))
 
     where_str = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -67,13 +92,7 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
     if plan.intent == "exploratory":
         dims = list(plan.dimensions) if plan.dimensions else ["product_name"]
         first_dim = dims[0]
-        exp_filters = []
-        for f in plan.filters:
-            if f.operator == "IN" and isinstance(f.value, list):
-                vals = ", ".join(f"'{v}'" for v in f.value)
-                exp_filters.append(f"{f.field} IN ({vals})")
-            else:
-                exp_filters.append(f"{f.field} = '{f.value}'")
+        exp_filters = [_format_filter_clause(f) for f in plan.filters]
         exp_where = f" WHERE {' AND '.join(exp_filters)}" if exp_filters else ""
 
         if dims == ["product_category"] and "product_count" in plan.metrics:
@@ -159,9 +178,10 @@ def generate_sql(state: AgentState) -> Dict[str, Any]:
     user_message = state.get("user_message", "")
     session_id = state.get("session_id", "default")
 
-    # 1. Retrieve schema and dynamic in-context few-shot examples
+    # 1. Retrieve schema and dynamic in-context few-shot examples (using Commander's standalone_query when available)
     schema_info = get_schema_prompt_text()
-    few_shots = state.get("few_shots") or retrieve_few_shots(user_message, k=3)
+    retrieval_query = (plan.standalone_query if plan and plan.standalone_query else user_message)
+    few_shots = state.get("few_shots") or retrieve_few_shots(retrieval_query, top_k=3)
 
     fs_items = []
     for fs in few_shots:
@@ -211,16 +231,7 @@ def generate_sql(state: AgentState) -> Dict[str, Any]:
 
     filter_instruction = ""
     if plan and plan.filters:
-        f_clauses = []
-        for f in plan.filters:
-            op = str(f.operator).upper().strip()
-            if op == "IN" and isinstance(f.value, list):
-                vals = ", ".join(f"'{v}'" for v in f.value)
-                f_clauses.append(f"{f.field} IN ({vals})")
-            elif op in ("!=", "NOT_EQUALS", "NEQ"):
-                f_clauses.append(f"{f.field} != '{f.value}'")
-            else:
-                f_clauses.append(f"{f.field} = '{f.value}'")
+        f_clauses = [_format_filter_clause(f) for f in plan.filters]
         if f_clauses:
             filter_instruction = f"Wajib gunakan filter bisnis aktif berikut: {' AND '.join(f_clauses)}.\n"
 
@@ -234,7 +245,9 @@ def generate_sql(state: AgentState) -> Dict[str, Any]:
                 "FROM v_order_lines GROUP BY product_category ORDER BY total_products DESC;\n"
             )
         plan_summary = (
-            f"Panduan Rencana Semantik (QueryPlan):\n"
+            f"Panduan Commander & Rencana Semantik (QueryPlan):\n"
+            f"- Sub-Agent Spesialis: {plan.specialist_agent}\n"
+            f"- Pertanyaan Kontekstual (Standalone Query): {plan.standalone_query or user_message}\n"
             f"- Intent: {plan.intent}\n"
             f"- Metrik: {', '.join(plan.metrics)}\n"
             f"- Dimensi GROUP BY: {dims_hint}\n"
@@ -244,8 +257,8 @@ def generate_sql(state: AgentState) -> Dict[str, Any]:
         )
 
     # 5. Build prompt
-    prompt = f"""Anda adalah Senior Database Architect PostgreSQL untuk Enterprise Conversational BI.
-Tugas Anda adalah menghasilkan HANYA kode query SQL SELECT PostgreSQL tunggal yang akurat, aman, dan berkinerja tinggi.
+    system_header = _get_system_prompt_header()
+    prompt = f"""{system_header}
 
 {schema_info}
 
@@ -271,7 +284,8 @@ Tugas Anda adalah menghasilkan HANYA kode query SQL SELECT PostgreSQL tunggal ya
 6. Perhatikan Riwayat Percakapan & QueryPlan: jika pengguna bertanya singkat seperti "apa aja?", "ada apa aja?", atau "kategori produknya?", pastikan subjek entitas melanjutkan topik putaran sebelumnya sesuai Dimensi GROUP BY pada QueryPlan.
 7. Hasilkan HANYA kode SQL murni tanpa blok markdown ```sql dan tanpa penjelasan tambahan.
 
-Pertanyaan Pengguna: {user_message}
+Pertanyaan Asli Pengguna: {user_message}
+Pertanyaan Kontekstual (Resolved): {plan.standalone_query if plan and plan.standalone_query else user_message}
 SQL:"""
 
     try:
