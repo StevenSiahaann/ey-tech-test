@@ -20,6 +20,15 @@ export interface ReportMetadata {
   lang?: 'id' | 'en';
 }
 
+export function escapeHtml(raw: any): string {
+  return String(raw ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function exportToCsv(
   columns: { name: string }[],
   rows: Record<string, any>[],
@@ -35,7 +44,11 @@ export function exportToCsv(
     return colNames.map(col => {
       const val = r[col];
       if (val === null || val === undefined) return '""';
-      const strVal = String(val).replace(/"/g, '""');
+      let strVal = String(val).replace(/"/g, '""');
+      // Prevent CSV Formula Injection in Excel when a non-numeric cell starts with =, +, -, or @
+      if (typeof val !== 'number' && /^[=+\-@]/.test(strVal)) {
+        strVal = `'${strVal}`;
+      }
       return `"${strVal}"`;
     }).join(',');
   });
@@ -76,7 +89,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
       }
       return v.toLocaleString(isEn ? 'en-US' : 'id-ID');
     }
-    return String(v ?? '-');
+    return escapeHtml(v ?? '-');
   };
 
   // Generate SVG Chart if applicable
@@ -94,7 +107,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
         const bars = chartRows.map((r, i) => {
           const val = Number(r[yKey]) || 0;
           const pct = Math.max(8, Math.round((val / maxVal) * 100));
-          const label = String(r[xKey] || `Item ${i + 1}`);
+          const label = escapeHtml(r[xKey] || `Item ${i + 1}`);
           const displayVal = formatVal(val);
           return `
             <div style="margin-bottom: 12px;">
@@ -115,8 +128,8 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
           <div style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 22px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
             <div style="font-size: 13px; font-weight: 700; color: #2e2e38; margin-bottom: 18px; display: flex; align-items: center; gap: 8px;">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2e2e38" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-              <span>${chart.title || (isEn ? 'Distribution Analysis' : 'Visualisasi Distribusi')}</span>
-              <span style="font-size: 12px; color: #6b7280; font-weight: 500;">(${xKey.replace(/_/g, ' ')} vs ${yKey.replace(/_/g, ' ')})</span>
+              <span>${escapeHtml(chart.title || (isEn ? 'Distribution Analysis' : 'Visualisasi Distribusi'))}</span>
+              <span style="font-size: 12px; color: #6b7280; font-weight: 500;">(${escapeHtml(xKey.replace(/_/g, ' '))} vs ${escapeHtml(yKey.replace(/_/g, ' '))})</span>
             </div>
             ${bars}
           </div>
@@ -135,7 +148,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
           <div style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 22px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
             <div style="font-size: 13px; font-weight: 700; color: #2e2e38; margin-bottom: 18px; display: flex; align-items: center; gap: 8px;">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2e2e38" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
-              <span>${chart.title || (isEn ? 'Historical Trend' : 'Tren Data Historis')}</span>
+              <span>${escapeHtml(chart.title || (isEn ? 'Historical Trend' : 'Tren Data Historis'))}</span>
             </div>
             <svg viewBox="0 0 700 200" style="width: 100%; height: auto; overflow: visible;">
               <polyline fill="none" stroke="#2e2e38" stroke-width="2.5" points="${points}" />
@@ -143,7 +156,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
                 const x = 40 + (i / Math.max(chartRows.length - 1, 1)) * 620;
                 const val = Number(r[yKey]) || 0;
                 const y = 180 - (val / maxVal) * 140;
-                const dateLabel = String(r[xKey] || '').slice(5);
+                const dateLabel = escapeHtml(String(r[xKey] || '').slice(5));
                 return `
                   <circle cx="${x}" cy="${y}" r="4" fill="#ffe600" stroke="#2e2e38" stroke-width="2" />
                   <text x="${x}" y="196" font-size="10" text-anchor="middle" fill="#6b7280">${dateLabel}</text>
@@ -161,7 +174,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EY Enterprise BI Dossier - ${meta.userQuery}</title>
+  <title>EY Enterprise BI Dossier - ${escapeHtml(meta.userQuery)}</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -396,9 +409,9 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
           <div class="brand-logo">EY</div>
           <span class="badge">${isEn ? 'Executive Dossier' : 'Dossier Eksekutif'}</span>
         </div>
-        <h1>${meta.userQuery}</h1>
+        <h1>${escapeHtml(meta.userQuery)}</h1>
         <div class="meta-text">
-          ${isEn ? 'Generated:' : 'Dibuat:'} ${meta.timestamp} • Engine: ${meta.provider.toUpperCase()} (${meta.modelName}) • Status: AST Validated
+          ${isEn ? 'Generated:' : 'Dibuat:'} ${escapeHtml(meta.timestamp)} • Engine: ${escapeHtml(meta.provider.toUpperCase())} (${escapeHtml(meta.modelName)}) • Status: AST Validated
         </div>
       </div>
       <button class="print-btn" onclick="window.print()">
@@ -409,7 +422,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
 
     <!-- Executive Summary -->
     <div class="summary-box">
-      ${summary}
+      ${escapeHtml(summary)}
     </div>
 
     <!-- KPI Tiles -->
@@ -417,9 +430,9 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
       <div class="kpi-grid">
         ${kpis.map((k: any) => `
           <div class="kpi-tile">
-            <div class="kpi-label">${k.label}</div>
+            <div class="kpi-label">${escapeHtml(k.label)}</div>
             <div class="kpi-val">${formatVal(k.value)}</div>
-            ${k.subtitle ? `<div class="kpi-sub">${k.subtitle}</div>` : ''}
+            ${k.subtitle ? `<div class="kpi-sub">${escapeHtml(k.subtitle)}</div>` : ''}
           </div>
         `).join('')}
       </div>
@@ -435,7 +448,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
         <span>${isEn ? 'Key Analytical Insights' : 'Temuan Kunci Analitis'}</span>
       </div>
       <div class="box box-insights">
-        <ul>${insights.map((ins: string) => `<li>${ins}</li>`).join('')}</ul>
+        <ul>${insights.map((ins: string) => `<li>${escapeHtml(ins)}</li>`).join('')}</ul>
       </div>
     ` : ''}
 
@@ -446,7 +459,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
         <span>${isEn ? 'Strategic Recommendations' : 'Rekomendasi Tindakan Strategis'}</span>
       </div>
       <div class="box box-recom">
-        <ul>${recommendations.map((rec: string) => `<li><strong>▸</strong> ${rec}</li>`).join('')}</ul>
+        <ul>${recommendations.map((rec: string) => `<li><strong>▸</strong> ${escapeHtml(rec)}</li>`).join('')}</ul>
       </div>
     ` : ''}
 
@@ -461,7 +474,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
           <thead>
             <tr>
               <th style="width: 40px; text-align: center;">#</th>
-              ${columns.map(c => `<th>${c.name.replace(/_/g, ' ')}</th>`).join('')}
+              ${columns.map(c => `<th>${escapeHtml(c.name.replace(/_/g, ' '))}</th>`).join('')}
             </tr>
           </thead>
           <tbody>
@@ -482,13 +495,13 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2e2e38" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
         <span>${isEn ? 'Technical Audit Trace (PostgreSQL)' : 'Jejak Audit Teknis (PostgreSQL)'}</span>
       </div>
-      <pre><code>${sql}</code></pre>
+      <pre><code>${escapeHtml(sql)}</code></pre>
     ` : ''}
 
     <!-- Assumptions -->
     ${assumptions.length > 0 ? `
       <div class="footer-notes">
-        <strong>${isEn ? 'Assumptions:' : 'Perimeter Asumsi:'}</strong> ${assumptions.join(' • ')}
+        <strong>${isEn ? 'Assumptions:' : 'Perimeter Asumsi:'}</strong> ${assumptions.map((a: string) => escapeHtml(a)).join(' • ')}
       </div>
     ` : ''}
   </div>

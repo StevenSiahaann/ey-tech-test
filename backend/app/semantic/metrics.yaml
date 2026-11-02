@@ -76,12 +76,36 @@ metrics:
       en: ["order count", "total orders", "number of orders"]
     assumption: "Total pesanan dihitung dari ID pesanan unik."
 
+  aov:
+    name: "Average Order Value (AOV)"
+    description: "Rata-rata nilai pendapatan bersih per pesanan yang berstatus 'Completed'."
+    sql_expression: "ROUND((SUM(order_revenue)::numeric / NULLIF(SUM(is_completed), 0)::numeric), 2)"
+    view_field: "aov"
+    source_view: "v_orders"
+    unit: "currency_idr"
+    synonyms:
+      id: ["aov", "average order value", "rata-rata nilai pesanan", "nilai rata-rata order", "rata-rata belanja"]
+      en: ["aov", "average order value", "avg order value", "basket size"]
+    assumption: "AOV dihitung sebagai Total Net Revenue dibagi jumlah pesanan Completed."
+
+  margin_pct:
+    name: "Gross Margin Percentage (%)"
+    description: "Persentase Gross Margin terhadap Net Revenue untuk pesanan 'Completed'."
+    sql_expression: "ROUND((SUM(margin)::numeric / NULLIF(SUM(revenue), 0)::numeric) * 100, 2)"
+    view_field: "margin_pct"
+    source_view: "v_order_lines"
+    unit: "percentage"
+    synonyms:
+      id: ["margin percentage", "persentase margin", "rasio margin", "margin %", "persen margin"]
+      en: ["margin percentage", "margin ratio", "gross margin %", "profit margin %"]
+    assumption: "Margin % dihitung sebagai (Gross Margin / Net Revenue) × 100 untuk pesanan 'Completed'."
+
 dimensions:
   channel:
     field: "channel"
     allowed_values: ["POS", "E-commerce", "Marketplace", "Mobile App", "Social Commerce"]
   region:
-    field: "store_region" # or customer_region
+    field: "store_region"
     default_field: "store_region"
     allowed_values: ["Jawa", "Sumatera", "Kalimantan", "Sulawesi", "Bali & Nusa Tenggara"]
   city:
@@ -92,6 +116,9 @@ dimensions:
   segment:
     field: "customer_segment"
     allowed_values: ["Consumer", "Corporate", "SMB"]
+  payment_method:
+    field: "payment_method"
+    allowed_values: ["Bank Transfer", "COD", "Cash", "Credit Card", "Debit Card", "E-Wallet"]
   status:
     field: "status"
     allowed_values: ["Completed", "Cancelled", "Returned", "Pending"]

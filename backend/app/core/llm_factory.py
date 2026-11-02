@@ -198,6 +198,34 @@ def get_available_models() -> Dict[str, Any]:
     }
 
 
+ALLOWED_PROVIDER_MODELS = {
+    "gemini": {"gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"},
+    "azure_openai": {"gpt-4o", "gpt-4o-mini"},
+}
+
+
+def resolve_safe_provider_and_model(
+    provider_override: Optional[str] = None,
+    model_override: Optional[str] = None,
+) -> tuple[str, str]:
+    """
+    Validates requested provider and model against server-side allowlist
+    to prevent arbitrary expensive model invocation in PoC deployments.
+    """
+    raw_prov = (provider_override or settings.LLM_PROVIDER or "gemini").lower().strip()
+    provider = raw_prov if raw_prov in ALLOWED_PROVIDER_MODELS else settings.LLM_PROVIDER.lower().strip()
+    if provider not in ALLOWED_PROVIDER_MODELS:
+        provider = "gemini"
+
+    default_model = (
+        settings.AZURE_OPENAI_DEPLOYMENT if provider == "azure_openai" else settings.GEMINI_MODEL
+    )
+    allowed_set = ALLOWED_PROVIDER_MODELS[provider] | {default_model}
+    candidate = (model_override or "").strip()
+    model_name = candidate if candidate in allowed_set else default_model
+    return provider, model_name
+
+
 def get_llm(
     temperature: float = 0.0, 
     callbacks: Optional[list] = None,
@@ -206,30 +234,30 @@ def get_llm(
 ) -> Any:
     """
     Factory function returning a configured LangChain Chat Model
-    based on settings.LLM_PROVIDER ('gemini' or 'azure_openai') with optional per-request override.
+    based on settings.LLM_PROVIDER ('gemini' or 'azure_openai') with validated per-request override.
     """
-    provider = (provider_override or settings.LLM_PROVIDER).lower().strip()
+    provider, target_model = resolve_safe_provider_and_model(provider_override, model_override)
 
     if provider == "azure_openai":
         from langchain_openai import AzureChatOpenAI
         if not settings.AZURE_OPENAI_ENDPOINT or not settings.AZURE_OPENAI_API_KEY:
             raise ValueError("Azure OpenAI configuration missing: AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY are required.")
-        deployment = model_override or settings.AZURE_OPENAI_DEPLOYMENT
         return AzureChatOpenAI(
             azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
             api_key=settings.AZURE_OPENAI_API_KEY,
-            azure_deployment=deployment,
+            azure_deployment=target_model,
             api_version=settings.AZURE_OPENAI_API_VERSION,
             temperature=temperature,
+            max_retries=1,
+            timeout=10,
             callbacks=callbacks
         )
 
     # Default to Gemini
     from langchain_google_genai import ChatGoogleGenerativeAI
     api_key = settings.GEMINI_API_KEY or os.getenv("GOOGLE_API_KEY")
-    model_name = model_override or settings.GEMINI_MODEL
     return ChatGoogleGenerativeAI(
-        model=model_name,
+        model=target_model,
         google_api_key=api_key,
         temperature=temperature,
         max_retries=1,

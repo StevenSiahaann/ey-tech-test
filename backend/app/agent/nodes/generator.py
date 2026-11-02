@@ -10,6 +10,7 @@ from typing import Dict, Any, List
 from backend.app.agent.state import AgentState, QueryPlan
 from backend.app.core.llm_factory import get_llm, get_langfuse_callback
 from backend.app.core.logger import get_logger
+from backend.app.safety.sql_validator import escape_sql_literal, validate_and_sanitize_sql
 from backend.app.semantic.schema_registry import get_schema_prompt_text
 from backend.app.stores.vector_client import retrieve_few_shots
 
@@ -37,14 +38,14 @@ def _format_filter_clause(f) -> str:
     """Formats a single FilterItem (`=`, `!=`, `IN`, `NOT IN`) into a valid SQL predicate."""
     op = str(f.operator).upper().strip()
     if op == "IN" and isinstance(f.value, list):
-        vals = ", ".join(f"'{v}'" for v in f.value)
+        vals = ", ".join(f"'{escape_sql_literal(v)}'" for v in f.value)
         return f"{f.field} IN ({vals})"
     if op == "NOT IN" and isinstance(f.value, list):
-        vals = ", ".join(f"'{v}'" for v in f.value)
+        vals = ", ".join(f"'{escape_sql_literal(v)}'" for v in f.value)
         return f"{f.field} NOT IN ({vals})"
     if op in ("!=", "NOT_EQUALS", "NEQ"):
-        return f"{f.field} != '{f.value}'"
-    return f"{f.field} = '{f.value}'"
+        return f"{f.field} != '{escape_sql_literal(f.value)}'"
+    return f"{f.field} = '{escape_sql_literal(f.value)}'"
 
 
 def compile_sql_from_plan(plan: QueryPlan) -> str:
@@ -59,7 +60,9 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
     # Build WHERE clauses
     where_parts: List[str] = []
     if plan.start_date and plan.end_date and plan.intent != "exploratory":
-        where_parts.append(f"order_date >= '{plan.start_date}' AND order_date <= '{plan.end_date}'")
+        s_clean = escape_sql_literal(plan.start_date)
+        e_clean = escape_sql_literal(plan.end_date)
+        where_parts.append(f"order_date >= '{s_clean}' AND order_date <= '{e_clean}'")
 
     for f in plan.filters:
         where_parts.append(_format_filter_clause(f))
@@ -70,11 +73,23 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
     if plan.intent == "anomaly":
         anom_where = ["is_anomaly_drop_over_30pct = TRUE"]
         if plan.start_date and plan.end_date:
-            anom_where.append(f"order_date >= '{plan.start_date}' AND order_date <= '{plan.end_date}'")
+            s_clean = escape_sql_literal(plan.start_date)
+            e_clean = escape_sql_literal(plan.end_date)
+            anom_where.append(f"order_date >= '{s_clean}' AND order_date <= '{e_clean}'")
         return (
             "SELECT order_date, daily_revenue, avg_revenue_prev_7d, pct_change_vs_7d_avg "
             f"FROM v_daily_revenue WHERE {' AND '.join(anom_where)} ORDER BY order_date DESC;"
         )
+
+    # 1b. Daily / Time-Series Trend
+    if plan.intent == "trend":
+        if "gmv" in plan.metrics and "revenue" not in plan.metrics:
+            metric_col = "SUM(gmv) AS total_gmv"
+        elif "margin" in plan.metrics and "revenue" not in plan.metrics:
+            metric_col = "SUM(margin) AS total_margin"
+        else:
+            metric_col = "SUM(revenue) AS total_revenue"
+        return f"SELECT order_date, {metric_col} FROM v_order_lines{where_str} GROUP BY order_date ORDER BY order_date ASC;"
 
     # 2. Tiering (NTILE)
     if plan.intent == "tiering":
@@ -110,7 +125,7 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
 
     # 4. Cancel Rate (Order-level view `v_orders`)
     if "cancel_rate" in plan.metrics:
-        dims = [d for d in plan.dimensions if d in ("channel", "store_region", "store_city", "store_name", "customer_segment")]
+        dims = [d for d in plan.dimensions if d in ("channel", "store_region", "store_city", "store_name", "customer_segment", "payment_method")]
         dim_select = f"{', '.join(dims)}, " if dims else ""
         group_by = f" GROUP BY {', '.join(dims)}" if dims else ""
         order_by = " ORDER BY cancel_rate_pct DESC" if dims else ""
@@ -120,6 +135,20 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
             "ROUND((COUNT(CASE WHEN status = 'Cancelled' THEN 1 END)::numeric / NULLIF(COUNT(*), 0)::numeric) * 100, 2) AS cancel_rate_pct, "
             "COUNT(CASE WHEN status = 'Cancelled' THEN 1 END) AS cancelled_orders, "
             f"COUNT(*) AS total_orders FROM v_orders{where_str}{group_by}{order_by}{limit_str};"
+        )
+
+    # 4b. Average Order Value / AOV (Order-level view `v_orders`)
+    if "aov" in plan.metrics:
+        dims = [d for d in plan.dimensions if d in ("channel", "store_region", "store_city", "store_name", "customer_segment", "payment_method")]
+        dim_select = f"{', '.join(dims)}, " if dims else ""
+        group_by = f" GROUP BY {', '.join(dims)}" if dims else ""
+        order_by = f" ORDER BY aov {plan.sort_direction or 'DESC'}" if dims else ""
+        limit_str = f" LIMIT {plan.limit}" if plan.limit else ""
+        return (
+            f"SELECT {dim_select}"
+            "ROUND((SUM(order_revenue)::numeric / NULLIF(SUM(is_completed), 0)::numeric), 2) AS aov, "
+            "SUM(is_completed) AS completed_orders, "
+            f"SUM(order_revenue) AS total_revenue FROM v_orders{where_str}{group_by}{order_by}{limit_str};"
         )
 
     # 5. Distinct Entity Count Metrics
@@ -150,6 +179,8 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
         # For margin rankings, include total_revenue as secondary context column
         if "revenue" not in plan.metrics and plan.intent in ("ranking", "breakdown"):
             metric_exprs.append("SUM(revenue) AS total_revenue")
+    if "margin_pct" in plan.metrics:
+        metric_exprs.append("ROUND((SUM(margin)::numeric / NULLIF(SUM(revenue), 0)::numeric) * 100, 2) AS margin_pct")
     if "cogs" in plan.metrics:
         metric_exprs.append("SUM(cogs) AS total_cogs")
 
@@ -291,6 +322,15 @@ Pertanyaan Asli Pengguna: {user_message}
 Pertanyaan Kontekstual (Resolved): {plan.standalone_query if plan and plan.standalone_query else user_message}
 SQL:"""
 
+    # If retrying after a previous SQL validation or execution failure, converge deterministically
+    if state.get("retry_count", 0) >= 1 and plan:
+        compiled_sql = compile_sql_from_plan(plan)
+        logger.info(
+            f"[{plan.specialist_agent}] Self-Correction Retry #{state.get('retry_count')}: "
+            f"Converging via Deterministic Semantic Compiler: '{' '.join(compiled_sql.split())[:110]}'"
+        )
+        return {"raw_sql": compiled_sql, "current_step": "Semantic SQL Self-Corrected via Deterministic Compiler"}
+
     try:
         lf_cb = get_langfuse_callback(session_id=session_id)
         callbacks = [lf_cb] if lf_cb else None
@@ -316,6 +356,7 @@ SQL:"""
         # 1. Ensure all non-ID planned dimensions are present in the generated SQL
         # 2. Ensure multi-row GROUP BY queries always include ORDER BY
         # 3. Prevent COUNT(*) when distinct entity counts (product_count, store_count, etc.) are requested
+        # 4. Ensure AST validation passes; otherwise fallback to deterministic compiler
         sql_lower = raw_sql.lower()
         if plan:
             required_dims = [d.lower() for d in plan.dimensions if not d.endswith("_id")]
@@ -327,6 +368,8 @@ SQL:"""
             elif "group by" in sql_lower and "order by" not in sql_lower:
                 raw_sql = compile_sql_from_plan(plan)
             elif is_distinct_count and ("count(*)" in sql_lower or "group by product_id" in sql_lower or "group by store_id" in sql_lower):
+                raw_sql = compile_sql_from_plan(plan)
+            elif not validate_and_sanitize_sql(raw_sql).is_valid:
                 raw_sql = compile_sql_from_plan(plan)
 
         logger.info(f"[{plan.specialist_agent if plan else 'Generator'}] Generated SQL via LLM: '{' '.join(raw_sql.split())[:110]}'")

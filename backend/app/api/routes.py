@@ -3,40 +3,60 @@ FastAPI REST and SSE Routes for Conversational BI Agent.
 """
 
 import json
+import time
+from collections import defaultdict, deque
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.app.agent.graph import stream_conversational_turn, process_conversational_turn
 from backend.app.agent.state import AgentResponse
+from backend.app.core.config import settings
 from backend.app.core.logger import get_logger, get_log_rotation_status
 from backend.app.stores.redis_session import session_store
-from backend.app.semantic.schema_registry import ALLOWED_SCHEMAS
+from backend.app.semantic.schema_registry import ALLOWED_SCHEMAS, get_metrics_registry
 
 logger = get_logger("api.routes")
 router = APIRouter(prefix="/api")
 
+# Lightweight PoC Sliding-Window Rate Limiter (protects LLM quota without external infra)
+_rate_buckets: Dict[str, deque] = defaultdict(deque)
+
+
+def _check_rate_limit(client_ip: str) -> None:
+    limit = max(5, settings.RATE_LIMIT_PER_MINUTE)
+    now = time.time()
+    bucket = _rate_buckets[client_ip]
+    while bucket and (now - bucket[0]) > 60.0:
+        bucket.popleft()
+    if len(bucket) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail="Batas frekuensi permintaan PoC tercapai. Silakan tunggu beberapa detik sebelum mengirim pertanyaan berikutnya."
+        )
+    bucket.append(now)
+
 
 class ChatRequest(BaseModel):
-    session_id: str
-    message: str
+    session_id: str = Field(..., min_length=1, max_length=128)
+    message: str = Field(..., min_length=1, max_length=1000)
     stream: bool = True
-    llm_provider: Optional[str] = None
-    model_name: Optional[str] = None
-    language: Optional[str] = None
+    llm_provider: Optional[str] = Field(default=None, max_length=32)
+    model_name: Optional[str] = Field(default=None, max_length=64)
+    language: Optional[str] = Field(default=None, max_length=8)
 
 
 class FeedbackRequest(BaseModel):
-    trace_id: Optional[str] = None
-    session_id: Optional[str] = None
-    score: int # 1 for thumbs up, -1 for thumbs down
-    comment: Optional[str] = None
+    trace_id: Optional[str] = Field(default=None, max_length=128)
+    session_id: Optional[str] = Field(default=None, max_length=128)
+    score: int = Field(..., ge=-1, le=1)  # 1 for thumbs up, -1 for thumbs down
+    comment: Optional[str] = Field(default=None, max_length=500)
 
 
 class TestConnectionRequest(BaseModel):
-    provider: Optional[str] = "gemini"
-    model: Optional[str] = None
+    provider: Optional[str] = Field(default="gemini", max_length=32)
+    model: Optional[str] = Field(default=None, max_length=64)
 
 
 @router.get("/models")
@@ -94,11 +114,14 @@ def test_model_connection(req: TestConnectionRequest):
 
 
 @router.post("/chat")
-def chat_endpoint(req: ChatRequest):
+def chat_endpoint(req: ChatRequest, request: Request):
     """
     Main Chat Endpoint. Returns SSE stream of real-time agent progression
     or standard JSON response.
     """
+    client_ip = request.client.host if request and request.client else "127.0.0.1"
+    _check_rate_limit(client_ip)
+
     if not req.stream:
         resp = process_conversational_turn(
             req.session_id, 
@@ -126,11 +149,21 @@ def chat_endpoint(req: ChatRequest):
                     dumped = payload.model_dump() if hasattr(payload, "model_dump") else payload
                     yield f"event: {ev_type}\ndata: {json.dumps(dumped)}\n\n"
         except Exception as e:
+            logger.error(f"Unhandled error in SSE chat stream: {e}")
+            is_en = (req.language or "").lower() == "en"
             err_payload = {
                 "type": "error",
-                "language": req.language or "id",
-                "summary": f"Terjadi kesalahan pemrosesan: {str(e)[:120]}",
-                "insights": ["Permintaan tidak dapat diselesaikan karena kendala internal.", "Silakan muat ulang atau coba pertanyaan lain."],
+                "language": "en" if is_en else "id",
+                "summary": (
+                    "An internal processing error occurred while handling your request."
+                    if is_en else
+                    "Terjadi kendala internal saat memproses permintaan Anda."
+                ),
+                "insights": (
+                    ["Please try rephrasing your question or refreshing the session."]
+                    if is_en else
+                    ["Silakan coba sesuaikan pertanyaan Anda atau muat ulang sesi."]
+                ),
                 "assumptions": []
             }
             yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
@@ -165,8 +198,11 @@ def get_examples():
 
 @router.get("/schema")
 def get_schema_dictionary():
-    """Returns the analytical schema definitions."""
-    return ALLOWED_SCHEMAS
+    """Returns the analytical schema definitions and canonical metric registry (metrics.yaml SSOT)."""
+    return {
+        "views_and_tables": ALLOWED_SCHEMAS,
+        "metrics_registry": get_metrics_registry(),
+    }
 
 
 @router.get("/sessions/{session_id}")
@@ -216,11 +252,14 @@ def submit_feedback(req: FeedbackRequest):
 
 @router.get("/health")
 def healthcheck():
-    """Service health status including log rotation diagnostics."""
+    """Service health status including database readiness and log rotation diagnostics."""
+    from backend.app.stores.pg_executor import execute_readonly_sql
+    db_probe = execute_readonly_sql("SELECT 1 AS ok LIMIT 1;")
     return {
-        "status": "healthy",
+        "status": "healthy" if db_probe.success else "degraded",
         "service": "Conversational BI Agent",
         "semantic_layer": "active",
+        "database_engine": db_probe.engine,
         "guardrails": "enforced",
         "logging": get_log_rotation_status(),
     }

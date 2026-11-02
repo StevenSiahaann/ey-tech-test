@@ -65,6 +65,26 @@ class Settings(BaseSettings):
     MAX_ROWS: int = 1000
     SQL_TIMEOUT_MS: int = 10000
     MAX_SQL_RETRIES: int = 2
+    CORS_ALLOWED_ORIGINS: str = Field(
+        default="",
+        description="Comma-separated list of allowed CORS origins. Empty defaults to local dev origins in development or same-origin in production."
+    )
+    RATE_LIMIT_PER_MINUTE: int = Field(
+        default=30,
+        description="Max chat requests per IP per minute for PoC quota protection."
+    )
+
+    def get_cors_origins(self) -> list[str]:
+        if self.CORS_ALLOWED_ORIGINS and self.CORS_ALLOWED_ORIGINS.strip():
+            return [o.strip() for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip() and o.strip() != "*"]
+        if (self.APP_ENV or "").lower() in ("development", "dev", "local", "test"):
+            return [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:8000",
+                "http://127.0.0.1:8000",
+            ]
+        return []
 
     # Logging & Log Rotation Configuration
     LOG_LEVEL: str = "INFO"

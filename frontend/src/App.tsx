@@ -279,10 +279,19 @@ const formatCurrency = (val: number, lang: 'id' | 'en' = 'id') => {
     : `Rp ${Number(val).toLocaleString('id-ID')}`;
 };
 
+const generateSafeSessionId = (): string => {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `session-${crypto.randomUUID()}`;
+    }
+  } catch (e) {}
+  return `session-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+};
+
 const formatValue = (val: any, colName: string = '', lang: 'id' | 'en' = 'id'): string => {
   if (val === null || val === undefined) return '-';
   if (typeof val === 'number') {
-    const isCurrency = colName.includes('revenue') || colName.includes('gmv') || colName.includes('margin') || colName.includes('cogs') || colName.includes('price');
+    const isCurrency = colName.includes('revenue') || colName.includes('gmv') || colName.includes('margin') || colName.includes('cogs') || colName.includes('price') || colName === 'aov';
     if (isCurrency) return formatCurrency(val, lang);
     if (colName.includes('rate') || colName.includes('pct') || colName.includes('percentage')) return `${val}%`;
     return val.toLocaleString(lang === 'en' ? 'en-US' : 'id-ID');
@@ -307,6 +316,9 @@ const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, sessionId, la
   const [isTableExpanded, setIsTableExpanded] = useState<boolean>(false);
   const [feedbackScore, setFeedbackScore] = useState<number | null>(null);
 
+  const res = turn.agentResponse;
+  if (!res) return null;
+
   const handleFeedback = async (score: number) => {
     setFeedbackScore(score);
     try {
@@ -315,14 +327,12 @@ const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, sessionId, la
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: sessionId,
+          trace_id: res.trace?.trace_id,
           score
         })
       });
     } catch (e) {}
   };
-
-  const res = turn.agentResponse;
-  if (!res) return null;
 
   const isConversationalCard =
     res.type === 'discussion' ||
@@ -801,7 +811,7 @@ export function App() {
       const active = localStorage.getItem('ey_bi_active_session_id');
       if (active) return active;
     } catch (e) {}
-    return `session-${Math.random().toString(36).substring(2, 9)}`;
+    return generateSafeSessionId();
   });
 
   const [turns, setTurns] = useState<ChatTurn[]>(() => {
@@ -833,6 +843,7 @@ export function App() {
   }>({ status: 'idle' });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -889,7 +900,12 @@ export function App() {
 
   // Session Management Actions
   const handleNewChat = () => {
-    const newId = `session-${Math.random().toString(36).substring(2, 9)}`;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsProcessing(false);
+    }
+    const newId = generateSafeSessionId();
     setSessionId(newId);
     setTurns([]);
     setInputValue('');
@@ -983,10 +999,14 @@ export function App() {
     if (!queryText) setInputValue('');
     setIsProcessing(true);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           message: textToSend,
           session_id: sessionId,
@@ -1083,6 +1103,7 @@ export function App() {
         }
       }
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       setTurns(prev => prev.map(t =>
         t.id === turnId ? {
           ...t,
@@ -1098,6 +1119,7 @@ export function App() {
         } : t
       ));
     } finally {
+      abortControllerRef.current = null;
       setIsProcessing(false);
     }
   };

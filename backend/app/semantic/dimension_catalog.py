@@ -6,10 +6,11 @@ Supports multi-value entity linking (IN operator for comparisons like "POS vs E-
 or "Jakarta vs Surabaya") and strict word-boundary matching.
 """
 
+import difflib
 import time
 import logging
 import re
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Tuple
 from backend.app.stores.pg_executor import execute_readonly_sql
 from backend.app.agent.state import FilterItem
 
@@ -72,14 +73,32 @@ DIMENSION_ALIASES: Dict[str, Dict[str, str]] = {
         "korporat": "Corporate",
         "smb": "SMB",
         "umkm": "SMB",
-    }
+    },
+    "payment_method": {
+        "credit card": "Credit Card",
+        "kartu kredit": "Credit Card",
+        "debit card": "Debit Card",
+        "kartu debit": "Debit Card",
+        "e-wallet": "E-Wallet",
+        "ewallet": "E-Wallet",
+        "dompet digital": "E-Wallet",
+        "qris": "E-Wallet",
+        "bank transfer": "Bank Transfer",
+        "transfer bank": "Bank Transfer",
+        "virtual account": "Bank Transfer",
+        "cod": "COD",
+        "bayar di tempat": "COD",
+        "cash": "Cash",
+        "tunai": "Cash",
+    },
 }
 
 
 def get_dimension_catalog(force_refresh: bool = False) -> Dict[str, List[str]]:
     """
     Returns the dynamic dimension catalog fetched from the database with TTL caching.
-    Keys: 'store_region', 'product_category', 'store_city', 'channel', 'customer_segment'
+    Keys: 'store_region', 'product_category', 'store_city', 'channel', 'customer_segment',
+          'payment_method', 'product_brand', 'product_name', 'store_name'
     """
     global _catalog_cache, _last_fetch_time
     now = time.time()
@@ -92,7 +111,11 @@ def get_dimension_catalog(force_refresh: bool = False) -> Dict[str, List[str]]:
         "product_category": [],
         "store_city": [],
         "channel": [],
-        "customer_segment": []
+        "customer_segment": [],
+        "payment_method": [],
+        "product_brand": [],
+        "product_name": [],
+        "store_name": [],
     }
 
     try:
@@ -116,6 +139,22 @@ def get_dimension_catalog(force_refresh: bool = False) -> Dict[str, List[str]]:
         if r_segments.success and r_segments.rows:
             catalog["customer_segment"] = [r["segment"] for r in r_segments.rows if r.get("segment")]
 
+        r_payments = execute_readonly_sql("SELECT DISTINCT payment_method FROM orders WHERE payment_method IS NOT NULL ORDER BY payment_method;")
+        if r_payments.success and r_payments.rows:
+            catalog["payment_method"] = [r["payment_method"] for r in r_payments.rows if r.get("payment_method")]
+
+        r_brands = execute_readonly_sql("SELECT DISTINCT brand FROM products WHERE brand IS NOT NULL ORDER BY brand;")
+        if r_brands.success and r_brands.rows:
+            catalog["product_brand"] = [r["brand"] for r in r_brands.rows if r.get("brand")]
+
+        r_prods = execute_readonly_sql("SELECT DISTINCT product_name FROM products WHERE product_name IS NOT NULL ORDER BY product_name;")
+        if r_prods.success and r_prods.rows:
+            catalog["product_name"] = [r["product_name"] for r in r_prods.rows if r.get("product_name")]
+
+        r_stores = execute_readonly_sql("SELECT DISTINCT store_name FROM stores WHERE store_name IS NOT NULL ORDER BY store_name;")
+        if r_stores.success and r_stores.rows:
+            catalog["store_name"] = [r["store_name"] for r in r_stores.rows if r.get("store_name")]
+
         if any(catalog.values()):
             _catalog_cache = catalog
             _last_fetch_time = now
@@ -131,7 +170,11 @@ def get_dimension_catalog(force_refresh: bool = False) -> Dict[str, List[str]]:
             "product_category": ["FMCG", "Electronics", "Fashion", "Home & Living", "Health & Beauty"],
             "store_city": ["Jakarta", "Surabaya", "Bandung", "Medan", "Semarang", "Makassar", "Palembang", "Denpasar"],
             "channel": ["POS", "E-commerce", "Marketplace", "Mobile App", "Social Commerce"],
-            "customer_segment": ["Consumer", "Corporate", "SMB"]
+            "customer_segment": ["Consumer", "Corporate", "SMB"],
+            "payment_method": ["Bank Transfer", "COD", "Cash", "Credit Card", "Debit Card", "E-Wallet"],
+            "product_brand": [],
+            "product_name": [],
+            "store_name": [],
         }
 
     return _catalog_cache
@@ -205,4 +248,62 @@ def extract_dimension_filters(message: str) -> List[FilterItem]:
                 else:
                     filters.append(FilterItem(field=field, operator="NOT IN", value=neg_vals))
 
+    # 3. Fuzzy Entity Linking for Minor Typos (e.g. "Surabya" -> "Surabaya", "Jakrta" -> "Jakarta")
+    matched_fields = {f.field for f in filters}
+    words = re.findall(r'[a-zA-Z]{5,}', message)
+    stop_fuzzy = {
+        "revenue", "margin", "produk", "product", "products", "kategori", "category", "categories",
+        "channel", "channels", "bulan", "month", "minggu", "tahun", "tertinggi", "terendah",
+        "terbesar", "terlaris", "highest", "lowest", "berdasarkan", "untuk", "region", "wilayah",
+        "store", "stores", "cabang", "pelanggan", "customer", "segment", "segmen", "pesanan",
+        "order", "orders", "cancel", "cancelled", "anomali", "anomaly", "average", "perbandingan",
+        "bandingkan", "compare", "breakdown", "rincian", "daftar", "berapa", "jumlah", "total",
+        "kemarin", "yesterday", "terakhir", "januari", "februari", "maret", "april", "agustus",
+        "september", "oktober", "november", "desember", "metode", "pembayaran", "payment",
+        "strategi", "definisi", "artinya", "maksudnya", "penjualan", "omset", "omzet", "transaksi",
+    }
+    for field in ("store_city", "store_region", "product_category", "product_brand"):
+        if field in matched_fields:
+            continue
+        canon_map = {v.lower(): v for v in catalog.get(field, []) if len(v) >= 5}
+        if not canon_map:
+            continue
+        for w in words:
+            wl = w.lower()
+            if wl in stop_fuzzy or wl in canon_map:
+                continue
+            close = difflib.get_close_matches(wl, list(canon_map.keys()), n=1, cutoff=0.82)
+            if close:
+                resolved_val = canon_map[close[0]]
+                pos_idx = msg_lower.find(wl)
+                op = "!=" if (pos_idx >= 0 and _is_negated_at(msg_lower, pos_idx)) else "="
+                filters.append(FilterItem(field=field, operator=op, value=resolved_val))
+                matched_fields.add(field)
+                break
+
     return filters
+
+
+def detect_unresolved_location_mention(message: str, active_filters: List[FilterItem]) -> Optional[str]:
+    """
+    Detects if the user explicitly asked for a location/region/city/product after 'di <X>' or 'region <X>' or 'kota <X>'
+    that does not exist in the database catalog (e.g. 'Revenue di Papua bulan ini' or 'Revenue Indomie bulan ini'),
+    preventing silent fallback to national/unfiltered totals.
+    """
+    has_loc_filter = any(f.field in ("store_city", "store_region", "store_name") for f in active_filters)
+    if not has_loc_filter:
+        m_loc = re.search(
+            r'\b(?:di(?:\s+kota|\s+region|\s+wilayah)?|kota|region|wilayah|cabang)\s+([A-Z][a-zA-Z]{2,}|\b(?:papua|maluku|aceh|lampung|riau|batam|bogor|depok|malang|solo|cirebon|kupang|ambon|jayapura|singapore|malaysia)\b)',
+            message,
+            re.IGNORECASE,
+        )
+        if m_loc:
+            cand = m_loc.group(1).strip()
+            if cand.lower() not in {
+                "mana", "apa", "ini", "itu", "tadi", "atas", "bawah", "tertinggi", "terendah",
+                "terbesar", "bulan", "minggu", "tahun", "indonesia", "nasional", "semua", "seluruh",
+                "kategori", "channel", "kanal", "segmen", "toko", "store", "database", "katalog", "sistem",
+                "q1", "q2", "q3", "q4", "mtd", "ytd", "pos", "fmcg"
+            }:
+                return cand
+    return None

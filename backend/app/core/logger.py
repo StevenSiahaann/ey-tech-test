@@ -128,8 +128,6 @@ def setup_logging() -> None:
     timed_audit_handler.setFormatter(formatter)
     timed_audit_handler.addFilter(ctx_filter)
     audit_logger.addHandler(timed_audit_handler)
-    # Mirror security events to console as well
-    audit_logger.addHandler(console_handler)
 
     _LOGGING_INITIALIZED = True
 

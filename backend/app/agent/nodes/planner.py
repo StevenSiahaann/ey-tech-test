@@ -13,7 +13,12 @@ from typing import Dict, Any, Optional, List
 from backend.app.agent.state import AgentState, QueryPlan, FilterItem
 from backend.app.core.logger import get_logger
 from backend.app.semantic.time_resolver import resolve_time_window, get_as_of_date
-from backend.app.semantic.dimension_catalog import extract_dimension_filters
+from backend.app.semantic.dimension_catalog import (
+    extract_dimension_filters,
+    detect_unresolved_location_mention,
+    get_dimension_catalog,
+)
+from backend.app.safety.sql_validator import validate_and_sanitize_sql, escape_sql_literal
 from backend.app.stores.pg_executor import execute_readonly_sql
 
 logger = get_logger("agent.planner")
@@ -50,13 +55,22 @@ def _extract_metrics(msg_lower: str) -> List[str]:
     if re.search(r'\b(?:cancel\s+rate|cancellation\s+rate|tingkat\s+pembatalan|rasio\s+pembatalan|rasio\s+cancel)\b', msg_lower):
         metrics.append("cancel_rate")
 
+    if re.search(r'\b(?:aov|average\s+order\s+value|rata-rata\s+nilai\s+pesanan|rata-rata\s+nilai\s+order|rata\s+rata\s+order|nilai\s+rata-rata\s+pesanan)\b', msg_lower):
+        metrics.append("aov")
+
     if re.search(r'\b(?:gmv|gross\s+merchandise\s+value|nilai\s+transaksi\s+kotor|total\s+transaksi\s+kotor)\b', msg_lower):
         metrics.append("gmv")
 
     if re.search(r'\b(?:revenue|net\s+revenue|pendapatan|omset|omzet|penjualan)(?:nya)?\b', msg_lower):
         metrics.append("revenue")
 
-    if re.search(r'\b(?:margin|gross\s+margin|laba|profit|keuntungan)(?:nya)?\b', msg_lower):
+    if re.search(r'\b(?:margin\s+percentage|margin\s+pct|persentase\s+margin|rasio\s+margin|margin\s*%)\b', msg_lower):
+        metrics.append("margin_pct")
+        if "margin" not in metrics:
+            metrics.append("margin")
+        if "revenue" not in metrics:
+            metrics.append("revenue")
+    elif re.search(r'\b(?:margin|gross\s+margin|laba|profit|keuntungan)(?:nya)?\b', msg_lower):
         metrics.append("margin")
 
     if re.search(r'\b(?:cogs|hpp|harga\s+pokok|biaya\s+modal|cost\s+of\s+goods)(?:nya)?\b', msg_lower):
@@ -84,22 +98,27 @@ def _resolve_top_city_dynamically(filters: List[FilterItem], start_date: str, en
     """Queries the database to find the actual #1 city for the active context when digest is missing."""
     where_clauses = []
     if start_date and end_date:
-        where_clauses.append(f"order_date >= '{start_date}' AND order_date <= '{end_date}'")
+        s_clean = escape_sql_literal(start_date)
+        e_clean = escape_sql_literal(end_date)
+        where_clauses.append(f"order_date >= '{s_clean}' AND order_date <= '{e_clean}'")
     for f in filters:
         if f.field != "store_city":
             if f.operator == "=":
-                where_clauses.append(f"{f.field} = '{f.value}'")
+                where_clauses.append(f"{f.field} = '{escape_sql_literal(f.value)}'")
             elif f.operator == "!=":
-                where_clauses.append(f"{f.field} != '{f.value}'")
+                where_clauses.append(f"{f.field} != '{escape_sql_literal(f.value)}'")
             elif f.operator == "IN" and isinstance(f.value, list):
-                vals = ", ".join(f"'{v}'" for v in f.value)
+                vals = ", ".join(f"'{escape_sql_literal(v)}'" for v in f.value)
                 where_clauses.append(f"{f.field} IN ({vals})")
             elif f.operator == "NOT IN" and isinstance(f.value, list):
-                vals = ", ".join(f"'{v}'" for v in f.value)
+                vals = ", ".join(f"'{escape_sql_literal(v)}'" for v in f.value)
                 where_clauses.append(f"{f.field} NOT IN ({vals})")
     where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     sql = f"SELECT store_city, SUM(revenue) AS total_revenue FROM v_order_lines{where_sql} GROUP BY store_city ORDER BY total_revenue DESC LIMIT 1;"
-    res = execute_readonly_sql(sql)
+    val_res = validate_and_sanitize_sql(sql)
+    if not val_res.is_valid or not val_res.sanitized_sql:
+        return None
+    res = execute_readonly_sql(val_res.sanitized_sql)
     if res.success and res.rows:
         return res.rows[0].get("store_city")
     return None
@@ -523,8 +542,14 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
             plan.intent = "breakdown"
             if "kategori" in msg_lower or "category" in msg_lower:
                 plan.dimensions = ["product_category"]
-            elif "channel" in msg_lower:
+            elif "channel" in msg_lower or "kanal" in msg_lower:
                 plan.dimensions = ["channel"]
+            elif "metode" in msg_lower or "pembayaran" in msg_lower or "payment" in msg_lower:
+                plan.dimensions = ["payment_method"]
+            elif "brand" in msg_lower or "merk" in msg_lower or "merek" in msg_lower:
+                plan.dimensions = ["product_brand"]
+            elif "segmen" in msg_lower or "segment" in msg_lower:
+                plan.dimensions = ["customer_segment"]
             elif "region" in msg_lower or "wilayah" in msg_lower:
                 plan.dimensions = ["store_region"]
             else:
@@ -594,6 +619,35 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
     if any(term in msg_lower for term in OUT_OF_SCOPE_TERMS) and not has_business_intent:
         plan.intent = "out_of_scope"
         return _finalize_commander_plan(msg, plan, lang, "Out of Scope (Domain Scope Guardrail)")
+
+    # 5b. Unresolved Geographic Entity Check (e.g. "GMV di Papua", "Revenue di Maluku")
+    unresolved_loc = detect_unresolved_location_mention(msg, plan.filters)
+    if unresolved_loc and plan.intent not in ("exploratory", "out_of_scope"):
+        plan.needs_clarification = True
+        plan.intent = "clarification_reply"
+        cat = get_dimension_catalog()
+        avail_regions = ", ".join(cat.get("store_region") or ["Jawa", "Sumatera", "Kalimantan", "Sulawesi", "Bali & Nusa Tenggara"])
+        if lang == "en":
+            plan.clarification_question = (
+                f"Location '{unresolved_loc}' was not found in our active store catalog (which covers 5 regions: {avail_regions}). "
+                f"Would you like to analyze one of our active regions instead?"
+            )
+            plan.clarification_options = [
+                {"label": f"Analyze Java Region ({plan.time_window_label})", "value": "MTD GMV for Java region?"},
+                {"label": f"Breakdown by All 5 Regions ({plan.time_window_label})", "value": "Breakdown revenue by region"},
+                {"label": "List All Store Branches & Cities", "value": "List of all stores"}
+            ]
+        else:
+            plan.clarification_question = (
+                f"Lokasi '{unresolved_loc}' belum terdaftar pada katalog cabang toko aktif kami (saat ini mencakup 5 region: {avail_regions}). "
+                f"Apakah Anda ingin melihat analisis untuk salah satu region aktif berikut?"
+            )
+            plan.clarification_options = [
+                {"label": f"Analisis Region Jawa ({plan.time_window_label})", "value": "GMV MTD untuk region Jawa?"},
+                {"label": f"Rincian Seluruh 5 Region ({plan.time_window_label})", "value": "Breakdown per region"},
+                {"label": "Daftar Seluruh Cabang Toko & Kota", "value": "Daftar toko apa saja?"}
+            ]
+        return _finalize_commander_plan(msg, plan, lang, f"Needs Clarification (Unresolved Location: {unresolved_loc})")
 
     # 6. Ambiguity Gatekeeper: Proactive Clarification Loop (ClarificationGuardSpecialist)
     words = msg_lower.split()
@@ -739,6 +793,16 @@ def _detect_metrics_and_intent(
         plan.sort_direction = "DESC"
         return extracted_metrics
 
+    # 1b. Daily / Time-Series Trend Intent
+    if re.search(r'\b(?:tren|trend|harian|daily|per\s+hari|per\s+tanggal|day\s+by\s+day|time\s+series)\b', msg_lower):
+        plan.intent = "trend"
+        if not plan.metrics:
+            plan.metrics = ["revenue"]
+        plan.dimensions = ["order_date"]
+        plan.sort_by = "order_date"
+        plan.sort_direction = "ASC"
+        return extracted_metrics
+
     # 2. Tiering Intent
     if re.search(r'\b(?:tier|tiering|kuantil|ntile)\b', msg_lower):
         plan.intent = "tiering"
@@ -842,6 +906,10 @@ def _detect_metrics_and_intent(
     elif re.search(r'\b(?:channel|channels|kanal|saluran)(?:nya)?\b', msg_lower) or "channel" in in_filter_fields:
         if "channel_count" not in plan.metrics:
             plan.dimensions = ["channel"]
+    elif re.search(r'\b(?:metode\s+pembayaran|payment\s+methods?|cara\s+bayar|mode\s+pembayaran|jenis\s+pembayaran)\b', msg_lower) or "payment_method" in in_filter_fields:
+        plan.dimensions = ["payment_method"]
+    elif re.search(r'\b(?:brand|brands|merk|merek)(?:nya)?\b', msg_lower) or "product_brand" in in_filter_fields:
+        plan.dimensions = ["product_brand"]
     elif re.search(r'\b(?:segment|segments|segmen)(?:nya)?\b', msg_lower) or "customer_segment" in in_filter_fields:
         plan.dimensions = ["customer_segment"]
     elif re.search(r'\b(?:per\s+kota|per\s+city|by\s+city|kota\s+mana|which\s+city|antar\s+kota)\b', msg_lower) or "store_city" in in_filter_fields:
@@ -850,16 +918,16 @@ def _detect_metrics_and_intent(
         plan.dimensions = ["store_region"]
     elif "product_category" in in_filter_fields:
         plan.dimensions = ["product_category"]
-    elif "cancel_rate" not in plan.metrics and not any(m.endswith("_count") for m in plan.metrics):
+    elif "cancel_rate" not in plan.metrics and "aov" not in plan.metrics and not any(m.endswith("_count") for m in plan.metrics):
         for f in plan.filters:
             if f.operator in ("=", "IN") and f.field not in plan.dimensions:
                 plan.dimensions.append(f.field)
 
     # 8. Detect Comparison vs Ranking vs Breakdown vs Metric Query
     has_comparison_marker = bool(re.search(r'\b(?:vs\.?|versus|bandingkan|perbandingan|dibanding|compare|compared\s+to)\b', msg_lower)) or bool(in_filter_fields)
-    top_n_match = re.search(r'\b(?:top|bottom|teratas|tertinggi|terbesar|terlaris|terendah)\s+(\d+)\b|\b(\d+)\s+(?:produk|product|products|store|stores|toko|channel|kota|city|segmen|segment)?\s*(?:teratas|tertinggi|terbesar|terlaris|terendah|paling\s+sepi)\b', msg_lower)
+    top_n_match = re.search(r'\b(?:top|bottom|teratas|tertinggi|terbesar|terlaris|terendah)\s+(\d+)\b|\b(\d+)\s+(?:produk|product|products|store|stores|toko|channel|kota|city|segmen|segment|brand|merk)?\s*(?:teratas|tertinggi|terbesar|terlaris|terendah|paling\s+sepi)\b', msg_lower)
     has_breakdown_marker = bool(re.search(
-        r'\b(?:breakdown|rincian|per\s+kota|per\s+city|per\s+region|per\s+channel|per\s+kategori|per\s+category|per\s+segmen|by\s+city|by\s+region|by\s+channel|by\s+category|by\s+segment)\b',
+        r'\b(?:breakdown|rincian|per\s+kota|per\s+city|per\s+region|per\s+channel|per\s+kategori|per\s+category|per\s+segmen|per\s+metode|per\s+brand|by\s+city|by\s+region|by\s+channel|by\s+category|by\s+segment|by\s+payment|by\s+brand)\b',
         msg_lower
     ))
 
@@ -878,7 +946,11 @@ def _detect_metrics_and_intent(
         plan.intent = "metric_query"
 
     # Determine primary sort column
-    if "margin" in plan.metrics and "revenue" not in plan.metrics:
+    if "margin_pct" in plan.metrics:
+        plan.sort_by = "margin_pct"
+    elif "aov" in plan.metrics:
+        plan.sort_by = "aov"
+    elif "margin" in plan.metrics and "revenue" not in plan.metrics:
         plan.sort_by = "total_margin"
     elif "gmv" in plan.metrics and "revenue" not in plan.metrics:
         plan.sort_by = "total_gmv"

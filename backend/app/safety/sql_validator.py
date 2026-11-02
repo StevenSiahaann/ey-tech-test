@@ -22,12 +22,26 @@ DISALLOWED_KEYWORDS = {
 }
 
 DANGEROUS_FUNCTIONS = {
-    "pg_sleep", "pg_read_file", "pg_write_file", "pg_ls_dir", "dblink",
-    "dblink_exec", "lo_export", "lo_import", "set_config", "current_setting",
-    "pg_terminate_backend", "pg_cancel_backend"
+    "pg_sleep", "pg_read_file", "pg_read_binary_file", "pg_write_file", "pg_ls_dir",
+    "pg_stat_file", "dblink", "dblink_exec", "lo_export", "lo_import", "lo_get",
+    "lo_put", "lo_from_bytea", "set_config", "current_setting",
+    "pg_terminate_backend", "pg_cancel_backend", "query_to_xml", "inet_server_addr",
+    "inet_server_port", "version"
+}
+
+ALLOWED_ANONYMOUS_FUNCTIONS = {
+    "ntile", "date_trunc", "date_part", "to_char", "round", "coalesce", "nullif",
+    "abs", "cast", "lower", "upper", "trim", "substring", "stddev",
+    "percentile_cont", "percentile_disc", "lag", "lead", "rank", "dense_rank",
+    "row_number", "extract", "greatest", "least"
 }
 
 FORBIDDEN_SCHEMAS = {"pg_catalog", "information_schema", "pg_toast"}
+
+
+def escape_sql_literal(value: object) -> str:
+    """Safely escapes single quotes in SQL string literals to prevent injection or broken syntax."""
+    return str(value).replace("'", "''")
 
 
 class ValidationResult:
@@ -100,6 +114,12 @@ def validate_and_sanitize_sql(raw_sql: str, max_limit: int = 1000) -> Validation
                 fn_name = node.name.lower()
                 if fn_name in DANGEROUS_FUNCTIONS:
                     return ValidationResult(is_valid=False, errors=[f"Fungsi berbahaya '{fn_name}' diblokir."])
+                if fn_name not in ALLOWED_ANONYMOUS_FUNCTIONS:
+                    return ValidationResult(is_valid=False, errors=[f"Fungsi tidak dikenal atau tidak diizinkan: '{fn_name}'."])
+            elif isinstance(node, exp.Func):
+                fn_name = (node.sql_name() or "").lower()
+                if fn_name in DANGEROUS_FUNCTIONS:
+                    return ValidationResult(is_valid=False, errors=[f"Fungsi berbahaya '{fn_name}' diblokir."])
 
             if isinstance(node, exp.Table):
                 table_name = node.name.lower()
@@ -114,12 +134,12 @@ def validate_and_sanitize_sql(raw_sql: str, max_limit: int = 1000) -> Validation
                 if table_name in allowed_tables:
                     referenced_base_tables.add(table_name)
 
-        # Validate column names when query only references allowed base tables/views (no CTEs)
-        if referenced_base_tables and not cte_names:
+        # Validate column names against allowed base tables/views AND CTE aliases (closes CTE column bypass)
+        if referenced_base_tables:
             allowed_cols: Set[str] = set()
             for t_name in referenced_base_tables:
                 allowed_cols.update(get_allowed_columns_for_table(t_name))
-            # Also allow SELECT aliases defined in the query (used in GROUP BY / ORDER BY)
+            # Also allow SELECT aliases defined in the query or inside CTE projections
             select_aliases = {alias.alias.lower() for alias in parsed.find_all(exp.Alias) if alias.alias}
             for col_node in parsed.find_all(exp.Column):
                 c_name = col_node.name.lower()

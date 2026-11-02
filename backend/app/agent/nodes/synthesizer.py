@@ -62,6 +62,8 @@ def _resolve_entity_meta(columns: List[Dict[str, str]], rows: List[Dict[str, Any
         ("product_name", "Produk"),
         ("store_name", "Toko / Cabang"),
         ("channel", "Channel Penjualan"),
+        ("payment_method", "Metode Pembayaran"),
+        ("product_brand", "Brand Produk"),
         ("customer_segment", "Segmen Pelanggan"),
         ("store_city", "Kota"),
         ("store_region", "Region"),
@@ -71,6 +73,8 @@ def _resolve_entity_meta(columns: List[Dict[str, str]], rows: List[Dict[str, Any
         ("product_name", "Product"),
         ("store_name", "Store"),
         ("channel", "Sales Channel"),
+        ("payment_method", "Payment Method"),
+        ("product_brand", "Product Brand"),
         ("customer_segment", "Customer Segment"),
         ("store_city", "City"),
         ("store_region", "Region"),
@@ -189,7 +193,8 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
     has_metric_cols = any(
         c in col_names
         for c in ("total_revenue", "total_gmv", "total_margin", "total_cogs", "revenue", "gmv", "margin",
-                  "total_products", "total_stores", "total_categories", "total_channels", "cancel_rate_pct", "daily_revenue")
+                  "total_products", "total_stores", "total_categories", "total_channels", "cancel_rate_pct",
+                  "daily_revenue", "aov", "margin_pct")
     )
     is_count_metric = any(m in plan.metrics for m in ("product_count", "store_count", "category_count", "channel_count"))
 
@@ -286,6 +291,51 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
         )
 
     # -------------------------------------------------------------------------
+    # CASE 1B: Daily / Time-Series Trend (`plan.intent == "trend"`)
+    # -------------------------------------------------------------------------
+    elif plan.intent == "trend" and "order_date" in col_names:
+        metric_col = next(
+            (c for c in ("total_revenue", "total_gmv", "total_margin", "daily_revenue") if c in col_names),
+            col_names[-1]
+        )
+        metric_label = "GMV" if "gmv" in metric_col else ("Gross Margin" if "margin" in metric_col else "Net Revenue")
+        total_val = sum(float(r.get(metric_col) or 0.0) for r in rows)
+        avg_daily = total_val / len(rows) if rows else 0.0
+        peak_row = max(rows, key=lambda r: float(r.get(metric_col) or 0.0))
+        trough_row = min(rows, key=lambda r: float(r.get(metric_col) or 0.0))
+        peak_val = float(peak_row.get(metric_col) or 0.0)
+        trough_val = float(trough_row.get(metric_col) or 0.0)
+        filter_desc = _describe_active_filters(plan, lang)
+        scope_str = f" ({filter_desc})" if filter_desc else ""
+
+        summary = (
+            f"Daily {metric_label} trend over {len(rows)} days ({plan.time_window_label}{scope_str}) totaled {format_idr(total_val, lang)} "
+            f"(daily average: {format_idr(avg_daily, lang)}), peaking on {peak_row.get('order_date')} at {format_idr(peak_val, lang)}."
+            if is_en else
+            f"Tren {metric_label} harian selama {len(rows)} hari ({plan.time_window_label}{scope_str}) mencatatkan total {format_idr(total_val, lang)} "
+            f"(rata-rata harian: {format_idr(avg_daily, lang)}), dengan puncak tertinggi pada {peak_row.get('order_date')} sebesar {format_idr(peak_val, lang)}."
+        )
+        kpis.append(KPICard(label=f"Total {metric_label}", value=total_val, format="currency_idr", subtitle=plan.time_window_label))
+        kpis.append(KPICard(label="Daily Average" if is_en else "Rata-rata Harian", value=avg_daily, format="currency_idr", subtitle=f"{len(rows)} {'days' if is_en else 'hari'}"))
+        kpis.append(KPICard(label="Peak Date" if is_en else "Tanggal Tertinggi", value=str(peak_row.get("order_date")), format="text", subtitle=format_idr(peak_val, lang)))
+        insights.append(
+            f"Highest daily {metric_label} occurred on {peak_row.get('order_date')} ({format_idr(peak_val, lang)}), while the lowest occurred on {trough_row.get('order_date')} ({format_idr(trough_val, lang)})."
+            if is_en else
+            f"Capaian {metric_label} harian tertinggi terjadi pada {peak_row.get('order_date')} ({format_idr(peak_val, lang)}), sedangkan terendah pada {trough_row.get('order_date')} ({format_idr(trough_val, lang)})."
+        )
+        recommendations.append(
+            f"Peak Day Replication: Analyze promotional campaigns and channel traffic on {peak_row.get('order_date')} to replicate high-conversion patterns."
+            if is_en else
+            f"Replikasi Pola Puncak: Evaluasi pendorong trafik dan kampanye pada tanggal {peak_row.get('order_date')} untuk direplikasi pada hari dengan performa rendah."
+        )
+        chart_config = ChartConfig(
+            type="line",
+            x_axis="order_date",
+            y_axes=[metric_col],
+            title=f"Daily {metric_label} Trend ({plan.time_window_label})" if is_en else f"Tren {metric_label} Harian ({plan.time_window_label})"
+        )
+
+    # -------------------------------------------------------------------------
     # CASE 2: Cancel Rate (`v_orders`)
     # -------------------------------------------------------------------------
     elif "cancel_rate" in plan.metrics or "cancel_rate_pct" in col_names:
@@ -353,6 +403,55 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
             "Cancel rate = COUNT(status='Cancelled') / COUNT(total orders) × 100 from `v_orders`"
             if is_en else
             "Cancel rate dihitung dari COUNT(status='Cancelled') / COUNT(total pesanan) × 100 pada view `v_orders`"
+        )
+
+    # -------------------------------------------------------------------------
+    # CASE 2B: Average Order Value / AOV (`v_orders`)
+    # -------------------------------------------------------------------------
+    elif "aov" in plan.metrics or "aov" in col_names:
+        row0 = rows[0]
+        aov_val = float(row0.get("aov") or 0.0)
+        comp_orders = int(row0.get("completed_orders") or 0)
+        tot_rev = float(row0.get("total_revenue") or 0.0)
+        filter_desc = _describe_active_filters(plan, lang)
+        scope_str = f" ({filter_desc})" if filter_desc else ""
+
+        if len(rows) == 1 and len(plan.dimensions) == 0:
+            summary = (
+                f"Average Order Value (AOV) for {plan.time_window_label}{scope_str} reached {format_idr(aov_val, lang)} across {comp_orders:,} completed orders (Net Revenue: {format_idr(tot_rev, lang)})."
+                if is_en else
+                f"Rata-rata nilai pesanan (AOV) pada periode {plan.time_window_label}{scope_str} adalah {format_idr(aov_val, lang)} dari {comp_orders:,} pesanan selesai (Net Revenue: {format_idr(tot_rev, lang)})."
+            )
+            kpis.append(KPICard(label="Average Order Value (AOV)", value=aov_val, format="currency_idr", subtitle=f"{plan.time_window_label}{scope_str}"))
+            kpis.append(KPICard(label="Completed Orders" if is_en else "Pesanan Selesai", value=comp_orders, format="number"))
+            kpis.append(KPICard(label="Net Revenue", value=tot_rev, format="currency_idr"))
+        else:
+            entity_col, entity_label = _resolve_entity_meta(columns, rows, lang)
+            top_name = str(row0.get(entity_col, "N/A"))
+            summary = (
+                f"'{top_name}' leads in Average Order Value (AOV) for {plan.time_window_label}{scope_str} at {format_idr(aov_val, lang)} per completed order."
+                if is_en else
+                f"'{top_name}' mencatat rata-rata nilai pesanan (AOV) tertinggi pada periode {plan.time_window_label}{scope_str} sebesar {format_idr(aov_val, lang)} per pesanan selesai."
+            )
+            kpis.append(KPICard(label=f"#1 AOV ({entity_label})", value=top_name, format="text", subtitle=format_idr(aov_val, lang)))
+            kpis.append(KPICard(label="Highest AOV" if is_en else "AOV Tertinggi", value=aov_val, format="currency_idr", subtitle=plan.time_window_label))
+            if len(rows) > 1:
+                chart_config = ChartConfig(type="bar", x_axis=entity_col, y_axes=["aov"], title=f"AOV by {entity_label}")
+
+        insights.append(
+            f"AOV is calculated strictly over completed orders (`SUM(order_revenue) / COUNT(Completed Orders)`) from `v_orders`."
+            if is_en else
+            f"AOV dihitung secara ketat dari pesanan berstatus selesai (`SUM(order_revenue) / COUNT(Completed Orders)`) pada view `v_orders`."
+        )
+        recommendations.append(
+            "Basket Size Expansion: Introduce cross-category bundling and minimum-spend free shipping thresholds to lift AOV."
+            if is_en else
+            "Peningkatan Nilai Keranjang (Basket Size): Terapkan strategi bundling lintas kategori atau insentif batas minimum belanja untuk mendongkrak AOV."
+        )
+        assumptions.append(
+            "AOV = SUM(order_revenue) / SUM(is_completed) from `v_orders`"
+            if is_en else
+            "AOV dihitung dari SUM(order_revenue) / SUM(is_completed) pada view `v_orders`"
         )
 
     # -------------------------------------------------------------------------
@@ -700,6 +799,8 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
 
         else:
             # Top-N Ranking or Multi-row Breakdown
+            denom_lbl_en = f"of Top {len(rows)} total" if plan.limit else "of total"
+            denom_lbl_id = f"dari total Top {len(rows)} sebesar" if plan.limit else "dari total"
             if len(rows) == 1:
                 summary = (
                     f"Top {entity_label.lower()} for {plan.time_window_label}{scope_str} is '{top_name}' with {metric_label} of {format_idr(top_val, lang)}."
@@ -708,20 +809,28 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
                 )
             else:
                 summary = (
-                    f"'{top_name}' ranks #1 across {len(rows)} {entity_label.lower()}s for {plan.time_window_label}{scope_str} with {format_idr(top_val, lang)} ({top_share:.1f}% of total {format_idr(total_sum, lang)})."
+                    f"'{top_name}' ranks #1 across {len(rows)} {entity_label.lower()}s for {plan.time_window_label}{scope_str} with {format_idr(top_val, lang)} ({top_share:.1f}% {denom_lbl_en} {format_idr(total_sum, lang)})."
                     if is_en else
-                    f"'{top_name}' menempati peringkat #1 dari {len(rows)} {entity_label.lower()} pada periode {plan.time_window_label}{scope_str} dengan {metric_label} {format_idr(top_val, lang)} ({top_share:.1f}% dari total {format_idr(total_sum, lang)})."
+                    f"'{top_name}' menempati peringkat #1 dari {len(rows)} {entity_label.lower()} pada periode {plan.time_window_label}{scope_str} dengan {metric_label} {format_idr(top_val, lang)} ({top_share:.1f}% {denom_lbl_id} {format_idr(total_sum, lang)})."
                 )
 
             kpis.append(KPICard(
                 label=f"#1 {entity_label}",
                 value=top_name,
                 format="text",
-                subtitle=f"{format_idr(top_val, lang)} ({top_share:.1f}%)" if len(rows) > 1 else format_idr(top_val, lang)
+                subtitle=(
+                    f"{format_idr(top_val, lang)} ({top_share:.1f}% of Top {len(rows)})"
+                    if (len(rows) > 1 and plan.limit and is_en)
+                    else (
+                        f"{format_idr(top_val, lang)} ({top_share:.1f}% dari Top {len(rows)})"
+                        if (len(rows) > 1 and plan.limit)
+                        else (f"{format_idr(top_val, lang)} ({top_share:.1f}%)" if len(rows) > 1 else format_idr(top_val, lang))
+                    )
+                )
             ))
             if len(rows) > 1:
                 kpis.append(KPICard(
-                    label=f"Total {metric_label} ({len(rows)} {entity_label})",
+                    label=f"Total {metric_label} ({'Top ' if plan.limit else ''}{len(rows)} {entity_label})",
                     value=total_sum,
                     format="currency_idr",
                     subtitle=plan.time_window_label
@@ -738,10 +847,12 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
                     f"Peringkat pertama '{top_name}' menghasilkan Revenue {format_idr(rev0, lang)} dan Margin {format_idr(mar0, lang)} (efisiensi margin {mpct0:.1f}%)."
                 )
             else:
+                grp_scope_en = f"Top {len(rows)} group total" if plan.limit else "group total"
+                grp_scope_id = f"total Top {len(rows)}" if plan.limit else "total kelompok"
                 insights.append(
-                    f"'{top_name}' contributed {format_idr(top_val, lang)} ({top_share:.1f}% of the group total) in {plan.time_window_label}."
+                    f"'{top_name}' contributed {format_idr(top_val, lang)} ({top_share:.1f}% of the {grp_scope_en}) in {plan.time_window_label}."
                     if is_en else
-                    f"'{top_name}' memberikan kontribusi sebesar {format_idr(top_val, lang)} ({top_share:.1f}% dari total kelompok) pada periode {plan.time_window_label}."
+                    f"'{top_name}' memberikan kontribusi sebesar {format_idr(top_val, lang)} ({top_share:.1f}% dari {grp_scope_id}) pada periode {plan.time_window_label}."
                 )
 
             if len(rows) >= 2:
@@ -774,6 +885,11 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
             )
 
     # Construct Final AgentResponse
+    facts = {
+        "row_count": len(rows),
+        "kpis": [k.model_dump() for k in kpis],
+        "top_row": rows[0] if rows else None,
+    }
     resp = AgentResponse(
         type="answer",
         language=lang,
@@ -787,7 +903,7 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
         assumptions=assumptions,
         trace={"plan": plan.model_dump(), "row_count": len(rows)}
     )
-    return {"final_response": resp, "current_step": "Synthesized Grounded Final Answer"}
+    return {"final_response": resp, "facts": facts, "current_step": "Synthesized Grounded Final Answer"}
 
 
 def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
@@ -959,22 +1075,47 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
 
     # CASE 2B: Sales Channels Definition (POS, E-commerce, Marketplace, Mobile App, Social Commerce)
     elif bool(re.search(r'\b(?:pos|point\s+of\s+sale|e-commerce|ecommerce|marketplace|mobile\s+app|social\s+commerce)\b', msg_lower)):
-        summary = (
-            "POS (Point of Sale) refers to direct, in-person retail checkout transactions conducted at physical store branches (`stores`), where payment and item handover happen immediately on-site."
-            if is_en else
-            "POS (Point of Sale) adalah kanal penjualan ritel tatap muka secara langsung di kasir gerai atau cabang toko fisik (`stores`), di mana pembayaran dan penyerahan barang kepada pelanggan terjadi seketika di lokasi toko."
-        )
+        if re.search(r'\b(?:e-commerce|ecommerce)\b', msg_lower) and not re.search(r'\bpos\b', msg_lower):
+            summary = (
+                "E-commerce refers to direct-to-consumer digital transactions placed through the company's official web storefront, distinct from third-party Marketplaces or physical POS checkout."
+                if is_en else
+                "E-commerce adalah kanal penjualan digital langsung (direct-to-consumer) melalui situs web resmi perusahaan, berbeda dengan platform pihak ketiga (`Marketplace`) maupun kasir gerai fisik (`POS`)."
+            )
+        elif "marketplace" in msg_lower:
+            summary = (
+                "Marketplace refers to customer orders fulfilled through third-party digital commerce platforms (such as Tokopedia, Shopee, or Lazada), one of the 5 core sales channels in our omnichannel schema."
+                if is_en else
+                "Marketplace adalah kanal penjualan melalui platform e-dagang pihak ketiga, yang merupakan salah satu dari 5 channel penjualan utama pada sistem omnichannel kami."
+            )
+        elif "mobile app" in msg_lower:
+            summary = (
+                "Mobile App refers to transactions placed directly through the company's native iOS/Android retail application, supporting loyalty and repeat consumer purchases."
+                if is_en else
+                "Mobile App adalah kanal transaksi digital yang dilakukan pelanggan melalui aplikasi seluler resmi perusahaan."
+            )
+        elif "social commerce" in msg_lower:
+            summary = (
+                "Social Commerce refers to retail orders originating from social media storefronts and live-shopping channels (such as TikTok Shop or Instagram Checkout)."
+                if is_en else
+                "Social Commerce adalah kanal penjualan interaktif yang berasal dari platform media sosial dan live-shopping."
+            )
+        else:
+            summary = (
+                "POS (Point of Sale) refers to direct, in-person retail checkout transactions conducted at physical store branches (`stores`), where payment and item handover happen immediately on-site."
+                if is_en else
+                "POS (Point of Sale) adalah kanal penjualan ritel tatap muka secara langsung di kasir gerai atau cabang toko fisik (`stores`), di mana pembayaran dan penyerahan barang kepada pelanggan terjadi seketika di lokasi toko."
+            )
         insights = (
             [
-                "Role of POS in Our Omnichannel Schema: In the `orders` table (`v_order_lines` / `v_orders`), `POS` is one of the 5 balanced sales channels alongside `E-commerce` (official web store), `Marketplace` (third-party platforms), `Mobile App`, and `Social Commerce` (~20% share each).",
-                "Operational Characteristics (Offline vs Online): POS transactions are directly tied to physical store branches across 3 regions (`Jawa`, `Sumatera`, `Kalimantan/Sulawesi`) and typically exhibit lower order friction than digital channels.",
-                "Analytical Use Cases: You can compare `POS` vs `E-commerce` revenue side-by-side or drill down into top-performing physical store locations."
+                "Omnichannel Schema Coverage: In `orders` (`v_order_lines` / `v_orders`), transactions are distributed across 5 sales channels: `POS`, `E-commerce` (official web store), `Marketplace` (third-party platforms), `Mobile App`, and `Social Commerce` (~20% share each).",
+                "Store & Geographic Footprint: Transactions connect to 31 store branches across 5 regions (`Jawa`, `Sumatera`, `Kalimantan`, `Sulawesi`, and `Bali & Nusa Tenggara`) spanning 17 cities.",
+                "Analytical Use Cases: You can compare `POS` vs `E-commerce` revenue side-by-side or drill down into top-performing store branches."
             ]
             if is_en else
             [
-                "Peran POS dalam Skema Omnichannel Database Ini: Di dalam tabel `orders` (`v_order_lines` & `v_orders`), `POS` merupakan salah satu dari 5 channel penjualan utama bersama `E-commerce` (website resmi), `Marketplace` (platform pihak ketiga), `Mobile App`, dan `Social Commerce` (masing-masing ~20% distribusi transaksi).",
-                "Karakteristik Operasional (Offline vs Online): Transaksi `POS` mewakili pembelian langsung di 12 cabang toko fisik yang tersebar di 3 region (`Jawa`, `Sumatera`, `Kalimantan/Sulawesi`), berbeda dengan 4 kanal lainnya yang berbasis transaksi digital/pengiriman.",
-                "Kegunaan dalam Analisis BI: Anda dapat membandingkan performa penjualan kasir toko fisik (`POS`) melawan kanal online (`E-commerce`) untuk mengevaluasi efektivitas strategi omnichannel."
+                "Cakupan 5 Kanal Omnichannel: Di dalam tabel `orders` (`v_order_lines` & `v_orders`), transaksi terbagi ke dalam 5 channel utama: `POS` (kasir gerai fisik), `E-commerce` (website resmi), `Marketplace` (platform pihak ketiga), `Mobile App`, dan `Social Commerce` (masing-masing ~20% distribusi transaksi).",
+                "Jaringan Cabang & Wilayah Aktual: Jaringan ritel mencakup 31 cabang toko yang tersebar di 5 region (`Jawa`, `Sumatera`, `Kalimantan`, `Sulawesi`, dan `Bali & Nusa Tenggara`) pada 17 kota.",
+                "Kegunaan dalam Analisis BI: Anda dapat membandingkan performa antar kanal (`POS vs E-commerce`) maupun melihat kontribusi per metode pembayaran (`Credit Card`, `E-Wallet`, `Bank Transfer`, `Debit Card`, `Cash`, `COD`)."
             ]
         )
         recommendations = (
@@ -985,7 +1126,7 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
             if is_en else
             [
                 "Bandingkan Kecepatan Offline vs Online: Jalankan analisis perbandingan `Revenue POS vs E-commerce minggu ini` di bawah ini untuk melihat kontribusi kasir fisik dibanding toko online.",
-                "Evaluasi Produktivitas Cabang Fisik: Cek cabang toko (`store`) dengan revenue tertinggi untuk mengoptimalkan alokasi stok di gerai POS."
+                "Evaluasi Produktivitas Cabang Fisik: Cek cabang toko (`store`) dengan revenue tertinggi untuk mengoptimalkan alokasi stok."
             ]
         )
         follow_up_options = (
@@ -1004,22 +1145,53 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
 
     # CASE 2C: Product Categories & SKU Definitions (FMCG, Electronics, Fashion, Home & Living, Health & Beauty)
     elif bool(re.search(r'\b(?:fmcg|fast\s+moving|sku|stock\s+keeping|electronics|fashion|home\s*&\s*living|health\s*&\s*beauty)\b', msg_lower)):
-        summary = (
-            "FMCG (Fast-Moving Consumer Goods) refers to everyday consumer products that sell quickly at relatively low unit cost and high purchase frequency (such as packaged food, beverages, and household toiletries)."
-            if is_en else
-            "FMCG (Fast-Moving Consumer Goods) adalah kategori barang konsumsi sehari-hari yang berputar cepat dengan frekuensi pembelian berulang yang tinggi (seperti sembako, kopi, minuman, deterjen, dan kebutuhan rumah tangga harian)."
-        )
+        if re.search(r'\b(?:sku|stock\s+keeping)\b', msg_lower) and "fmcg" not in msg_lower:
+            summary = (
+                "SKU (Stock Keeping Unit) is a unique identifier assigned to each distinct purchasable product item (`product_id` / `product_name`) tracked in our inventory and sales catalog (28 total SKUs across 5 categories)."
+                if is_en else
+                "SKU (Stock Keeping Unit) adalah kode unit identifikasi unik untuk setiap item produk (`product_id` / `product_name`) yang dikelola dalam katalog penjualan (terdapat total 28 SKU lintas 5 kategori produk)."
+            )
+        elif "electronics" in msg_lower:
+            summary = (
+                "Electronics is one of our 5 core product categories (5 SKUs including Smart TV 43 Inch, Wireless Earbuds, Mechanical Keyboard, Powerbank, and Blender), characterized by high unit prices (`unit_price`) and strong revenue per order."
+                if is_en else
+                "Electronics adalah salah satu dari 5 kategori produk utama (mencakup 5 SKU seperti Smart TV 43 Inch, Wireless Earbuds, Mechanical Keyboard, Powerbank, dan Blender) yang memiliki karakteristik harga jual satuan (`unit_price`) tinggi."
+            )
+        elif "fashion" in msg_lower:
+            summary = (
+                "Fashion is one of our 5 product categories (5 SKUs including Sneakers, Chino Pants, Polo Shirt, Running Jacket, and Tote Bag) with strong gross margin percentages."
+                if is_en else
+                "Fashion adalah salah satu dari 5 kategori produk utama (mencakup 5 SKU seperti Sepatu Sneakers, Celana Chino, Kemeja Polo, Jaket Running, dan Tas Tote) dengan persentase margin kotor yang tinggi."
+            )
+        elif re.search(r'home\s*&\s*living', msg_lower):
+            summary = (
+                "Home & Living is one of our 5 product categories (4 SKUs including Ergonomic Work Chair, Bed Sheet Set, Non-Stick Frypan, and LED Desk Lamp)."
+                if is_en else
+                "Home & Living adalah salah satu dari 5 kategori produk utama (mencakup 4 SKU perlengkapan rumah tangga & ruang kerja seperti Kursi Kerja Ergonomis, Sprei Katun, Panci Set, dan Lampu Meja LED)."
+            )
+        elif re.search(r'health\s*&\s*beauty', msg_lower):
+            summary = (
+                "Health & Beauty is one of our 5 product categories (4 SKUs including Vitamin C Serum, Daily Sunscreen SPF50, Facial Wash, and Multivitamin)."
+                if is_en else
+                "Health & Beauty adalah salah satu dari 5 kategori produk utama (mencakup 4 SKU perawatan diri & kesehatan seperti Serum Vitamin C, Sunscreen SPF 50, Facial Wash, dan Multivitamin)."
+            )
+        else:
+            summary = (
+                "FMCG (Fast-Moving Consumer Goods) refers to everyday consumer products that sell quickly at relatively low unit cost and high purchase frequency (such as packaged food, beverages, and household toiletries)."
+                if is_en else
+                "FMCG (Fast-Moving Consumer Goods) adalah kategori barang konsumsi sehari-hari yang berputar cepat dengan frekuensi pembelian berulang yang tinggi (seperti sembako, kopi, minuman, deterjen, dan kebutuhan rumah tangga harian)."
+            )
         insights = (
             [
                 "Catalog Representation in Database: Out of 28 total SKUs (Stock Keeping Units) across 5 categories in `products`, `FMCG` is the largest category by item count (10 SKUs), followed by `Electronics` (5), `Fashion` (5), `Home & Living` (4), and `Health & Beauty` (4).",
                 "Volume vs Unit Price Dynamics: `FMCG` drives high order-line volume and repeat customer traffic, whereas `Electronics` and `Home & Living` carry higher unit prices (`unit_price`) per transaction.",
-                "Margin Analysis: Tracking both Net Revenue and Gross Margin (`Revenue − COGS`) for `FMCG` across regions like Java helps protect profitability on high-volume staples."
+                "Margin Analysis: Tracking both Net Revenue and Gross Margin (`Revenue − COGS`) across categories helps balance high-volume staples with high-ticket items."
             ]
             if is_en else
             [
-                "Posisi FMCG di Katalog Database: Dari total 28 SKU (produk unik) pada 5 kategori di tabel `products`, `FMCG` memiliki jumlah produk terbanyak (10 SKU, seperti Beras Pandan Wangi, Kopi Bubuk Arabika, Deterjen Bubuk), diikuti `Electronics` (5 SKU), `Fashion` (5 SKU), `Home & Living` (4 SKU), dan `Health & Beauty` (4 SKU).",
-                "Karakteristik Volume vs Nilai Satuan: Kategori `FMCG` menjadi penggerak frekuensi transaksi harian, sementara kategori seperti `Electronics` memiliki harga jual satuan (`unit_price`) yang jauh lebih besar.",
-                "Pentingnya Evaluasi Margin: Dalam analisis ritel, performa `FMCG` selalu disandingkan antara Net Revenue dan Gross Margin untuk menjaga efisiensi HPP (`COGS`)."
+                "Distribusi Katalog di Database: Dari total 28 SKU (produk unik) pada 5 kategori di tabel `products`, `FMCG` memiliki jumlah produk terbanyak (10 SKU), diikuti `Electronics` (5 SKU), `Fashion` (5 SKU), `Home & Living` (4 SKU), dan `Health & Beauty` (4 SKU).",
+                "Karakteristik Volume vs Nilai Satuan: Kategori `FMCG` menjadi penggerak frekuensi transaksi harian, sementara kategori seperti `Electronics` dan `Home & Living` memiliki harga jual satuan (`unit_price`) yang lebih besar.",
+                "Pentingnya Evaluasi Margin: Dalam analisis ritel, performa kategori selalu disandingkan antara Net Revenue dan Gross Margin untuk menjaga efisiensi HPP (`COGS`)."
             ]
         )
         recommendations = (
@@ -1047,24 +1219,37 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
             ]
         )
 
-    # CASE 2D: Time Window & Customer Segment Definitions (MTD, YTD, Q1-Q4, AOV, VIP, Corporate, Retail)
-    elif bool(re.search(r'\b(?:mtd|month\s+to\s+date|ytd|year\s+to\s+date|aov|average\s+order|vip|corporate|segmen\s+pelanggan)\b', msg_lower)):
-        summary = (
-            "MTD (Month-to-Date) and YTD (Year-to-Date) are standard analytical time windows anchored to the system's reference date (`AS_OF_DATE = 2026-10-29`, Asia/Jakarta timezone)."
-            if is_en else
-            "MTD (Month-to-Date) dan YTD (Year-to-Date) adalah standar rentang waktu evaluasi kinerja bisnis yang dihitung dari awal periode berjalan hingga tanggal acuan sistem (`AS_OF_DATE = 2026-10-29`, zona waktu Asia/Jakarta)."
-        )
+    # CASE 2D: Time Window, AOV, & Customer Segment Definitions (MTD, YTD, AOV, Consumer, Corporate, SMB)
+    elif bool(re.search(r'\b(?:mtd|month\s+to\s+date|ytd|year\s+to\s+date|aov|average\s+order|vip|corporate|smb|consumer|segmen\s+pelanggan)\b', msg_lower)):
+        if re.search(r'\b(?:aov|average\s+order)\b', msg_lower):
+            summary = (
+                "AOV (Average Order Value) measures the average realized monetary value per completed customer order, calculated as `Net Revenue / Completed Orders` from `v_orders`."
+                if is_en else
+                "AOV (Average Order Value / Rata-rata Nilai Pesanan) adalah metrik yang mengukur rata-rata nilai transaksi bersih untuk setiap pesanan yang selesai (`Net Revenue / Completed Orders`) pada view `v_orders`."
+            )
+        elif re.search(r'\b(?:vip|corporate|smb|consumer|segmen\s+pelanggan)\b', msg_lower):
+            summary = (
+                "Customer Segments (`Consumer`, `Corporate`, `SMB`) classify buyers in the `customers` table into three business tiers to analyze purchasing behavior and gross margin contribution (note: the schema uses `Consumer`, `Corporate`, and `SMB`)."
+                if is_en else
+                "Segmen Pelanggan (`Consumer`, `Corporate`, `SMB`) mengelompokkan pembeli pada tabel `customers` ke dalam tiga profil utama untuk menganalisis pola belanja dan kontribusi margin (catatan: skema database menggunakan `Consumer`, `Corporate`, dan `SMB`)."
+            )
+        else:
+            summary = (
+                "MTD (Month-to-Date) and YTD (Year-to-Date) are standard analytical time windows anchored to the system's reference date (`AS_OF_DATE = 2026-10-29`, Asia/Jakarta timezone)."
+                if is_en else
+                "MTD (Month-to-Date) dan YTD (Year-to-Date) adalah standar rentang waktu evaluasi kinerja bisnis yang dihitung dari awal periode berjalan hingga tanggal acuan sistem (`AS_OF_DATE = 2026-10-29`, zona waktu Asia/Jakarta)."
+            )
         insights = (
             [
                 "MTD (Month-to-Date / 'Bulan Ini'): Evaluates transactions from the 1st of the current month (`2026-10-01`) up to `2026-10-29`.",
                 "YTD (Year-to-Date / 'Tahun Ini'): Evaluates cumulative performance from January 1st (`2026-01-01`) up to `2026-10-29`.",
-                "Customer Segments (`Retail`, `Corporate`, `VIP`): The `customers` table classifies buyers into three tiers (`Retail`, `Corporate`, and `VIP`), allowing you to evaluate which segment yields the highest YTD Gross Margin."
+                "Customer Segments (`Consumer`, `Corporate`, `SMB`) & AOV: The `customers` table classifies buyers into `Consumer`, `Corporate`, and `SMB`, while AOV (`SUM(order_revenue) / SUM(is_completed)`) tracks basket value per completed order."
             ]
             if is_en else
             [
                 "MTD (Month-to-Date / 'Bulan Ini'): Mengevaluasi akumulasi transaksi sejak tanggal 1 bulan berjalan (`2026-10-01`) hingga tanggal acuan saat ini (`2026-10-29`).",
                 "YTD (Year-to-Date / 'Tahun Ini'): Mengevaluasi akumulasi kinerja sejak awal tahun (`2026-01-01`) hingga tanggal acuan (`2026-10-29`).",
-                "Segmen Pelanggan (`Retail`, `Corporate`, `VIP`) & AOV: Tabel `customers` mengelompokkan pembeli ke dalam 3 segmen (`Retail`, `Corporate`, `VIP`), sedangkan AOV (Average Order Value) mengukur rata-rata nilai belanja per pesanan."
+                "Segmen Pelanggan (`Consumer`, `Corporate`, `SMB`) & AOV: Tabel `customers` mengelompokkan pembeli ke dalam 3 segmen resmi (`Consumer`, `Corporate`, `SMB`), sedangkan AOV mengukur rata-rata nilai belanja per pesanan selesai (`SUM(order_revenue) / SUM(is_completed)`)."
             ]
         )
         recommendations = (
@@ -1172,6 +1357,39 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
                 "Optimasi Margin & Ketersediaan Produk: Fokuskan promosi bundling pada kategori bermargin tinggi dan jaga ketersediaan stok (safety stock) pada produk terlaris."
             ]
         )
+
+        # If the user asks an open-ended strategic / prescriptive question, allow LLM enrichment grounded strictly in last_rows
+        if re.search(r'\b(?:strategi|rekomendasi|saran|langkah|solusi|strategy|recommend|actions?|how\s+should\s+we)\b', msg_lower):
+            try:
+                llm = get_llm(
+                    provider_override=state.get("llm_provider"),
+                    model_override=state.get("model_name"),
+                )
+                lang_instruction = "English" if is_en else "Bahasa Indonesia"
+                grounded_prompt = (
+                    f"You are an Enterprise Retail Conversational BI Consultant.\n"
+                    f"Respond strictly in {lang_instruction} as a valid JSON object with keys: "
+                    f"\"summary\" (1-2 concise sentences grounded in the exact numbers from Prior Data Rows), "
+                    f"\"insights\" (array of 3 bullet strings citing the exact entities/numbers from Prior Data Rows), and "
+                    f"\"recommendations\" (array of 2 concrete retail strategy recommendations).\n"
+                    f"Active Window: {win_label}{scope_txt}\n"
+                    f"Prior Data Rows (STRICT GROUNDING): {json.dumps(last_rows[:5], default=str)}\n"
+                    f"User Question: {user_msg}\n"
+                    f"Output ONLY raw JSON without markdown fences."
+                )
+                llm_res = llm.invoke(grounded_prompt)
+                raw_txt = (llm_res.content if hasattr(llm_res, "content") else str(llm_res)).strip()
+                raw_txt = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_txt, flags=re.IGNORECASE).strip()
+                parsed_json = json.loads(raw_txt)
+                if isinstance(parsed_json, dict) and parsed_json.get("summary"):
+                    summary = str(parsed_json["summary"])
+                    if isinstance(parsed_json.get("insights"), list) and parsed_json["insights"]:
+                        insights = [str(x) for x in parsed_json["insights"][:4]]
+                    if isinstance(parsed_json.get("recommendations"), list) and parsed_json["recommendations"]:
+                        recommendations = [str(x) for x in parsed_json["recommendations"][:3]]
+            except Exception:
+                pass
+
         follow_up_options = (
             [
                 {"label": "Breakdown by City", "value": "Breakdown per city"},
@@ -1202,8 +1420,10 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
                 f"\"insights\" (array of 3 analytical/conceptual bullet strings grounded in retail BI), and "
                 f"\"recommendations\" (array of 2 actionable business recommendation strings).\n"
                 f"Domain Context: 28 products across 5 categories (FMCG, Electronics, Fashion, Home & Living, Health & Beauty), "
-                f"12 stores across 3 regions (Jawa, Sumatera, Kalimantan/Sulawesi), 5 sales channels (POS, E-commerce, Marketplace, Mobile App, Social Commerce), "
-                f"3 customer segments (Retail, Corporate, VIP). Metrics: GMV (all statuses), Net Revenue (Completed only), COGS, Gross Margin, Cancel Rate.\n"
+                f"31 stores across 5 regions (Jawa, Sumatera, Kalimantan, Sulawesi, Bali & Nusa Tenggara) and 17 cities, "
+                f"5 sales channels (POS, E-commerce, Marketplace, Mobile App, Social Commerce), "
+                f"6 payment methods (Bank Transfer, COD, Cash, Credit Card, Debit Card, E-Wallet), "
+                f"3 customer segments (Consumer, Corporate, SMB). Metrics: GMV (all statuses), Net Revenue (Completed only), COGS, Gross Margin, AOV, Cancel Rate.\n"
                 f"User Question: {user_msg}\n"
                 f"Output ONLY raw JSON without markdown fences."
             )

@@ -13,6 +13,7 @@ from typing import Dict, Any, Generator, Optional, Literal
 from langgraph.graph import StateGraph, END
 
 from backend.app.agent.state import AgentState, AgentResponse, ClarificationPayload
+from backend.app.core.config import settings
 from backend.app.core.logger import get_logger, set_log_context, log_step_event
 from backend.app.safety.input_guard import check_input_safety
 
@@ -64,7 +65,7 @@ def _route_after_plan(state: AgentState) -> Literal["retrieve", "discuss", "end_
 def _route_after_validate(state: AgentState) -> Literal["execute", "retry_generate", "synthesize"]:
     if state.get("validated_sql"):
         return "execute"
-    if state.get("retry_count", 0) < 2:
+    if state.get("retry_count", 0) < settings.MAX_SQL_RETRIES:
         return "retry_generate"
     return "synthesize"
 
@@ -73,7 +74,7 @@ def _route_after_execute(state: AgentState) -> Literal["synthesize", "retry_gene
     q_res = state.get("query_result") or {}
     if q_res.get("success", False):
         return "synthesize"
-    if state.get("retry_count", 0) < 2:
+    if state.get("retry_count", 0) < settings.MAX_SQL_RETRIES:
         return "retry_generate"
     return "synthesize"
 
@@ -472,6 +473,7 @@ def stream_conversational_turn(
         )
         disc_resp.trace["steps"] = steps_log
         disc_resp.trace["total_duration_ms"] = round((time.time() - t_start) * 1000, 1)
+        disc_resp.trace["trace_id"] = lf_trace.id if lf_trace else turn_req_id
 
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": disc_resp.summary})
@@ -512,7 +514,7 @@ def stream_conversational_turn(
     )
 
     # Step 5, 6, 7: SQL Generation -> AST Validation -> DB Execution (with Self-Correction Retry Loop)
-    max_retries = 2
+    max_retries = settings.MAX_SQL_RETRIES
     specialist_name = plan_obj.specialist_agent if plan_obj else "AnalyticalSQLSpecialist"
     while True:
         attempt = state.get("retry_count", 0) + 1
@@ -563,13 +565,14 @@ def stream_conversational_turn(
         exec_ok = q_res.get("success", False)
         exec_ms = q_res.get("execution_time_ms", 0)
         row_count = q_res.get("row_count", 0)
+        db_engine = q_res.get("engine", "duckdb")
 
         if exec_ok:
             yield make_step(
                 "execute_query",
                 "Relational Database Execution",
                 "Mengeksekusi query read-only pada database analitik",
-                f"SUKSES: Dieksekusi dalam {exec_ms}ms ({row_count} baris data dikembalikan)",
+                f"SUKSES ({db_engine}): Dieksekusi dalam {exec_ms}ms ({row_count} baris data dikembalikan)",
             )
             break
         else:
@@ -600,6 +603,8 @@ def stream_conversational_turn(
     # Attach thinking steps and total duration to final trace
     final_resp.trace["steps"] = steps_log
     final_resp.trace["total_duration_ms"] = round((time.time() - t_start) * 1000, 1)
+    final_resp.trace["trace_id"] = lf_trace.id if lf_trace else turn_req_id
+    final_resp.trace["engine"] = (state.get("query_result") or {}).get("engine", "duckdb")
 
     # Step 9: Save Context & Result Digest to Session Store
     new_digest = dict(prev_digest)
@@ -612,7 +617,7 @@ def stream_conversational_turn(
     # Extract entity values from current result rows for rich anaphoric follow-ups (e.g., "ini produknya di kategori apa?")
     if rows:
         entity_values: Dict[str, Any] = {}
-        for entity_key in ("product_name", "store_name", "store_city", "product_category", "channel", "customer_segment"):
+        for entity_key in ("product_name", "store_name", "store_city", "product_category", "channel", "customer_segment", "payment_method", "product_brand"):
             if entity_key in rows[0]:
                 vals = []
                 for r in rows[:10]:

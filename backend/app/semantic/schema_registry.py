@@ -3,7 +3,60 @@ Schema Registry and Allowlist for Conversational BI Agent.
 Used by Prompt Generators and SQL AST Validators to ensure strict schema compliance.
 """
 
-from typing import Dict, List, Set
+from pathlib import Path
+from typing import Dict, List, Set, Any
+
+_METRICS_YAML_PATH = Path(__file__).resolve().parent / "metrics.yaml"
+_CACHED_METRICS_REGISTRY: Dict[str, Any] = {}
+
+
+def get_metrics_registry() -> Dict[str, Any]:
+    """
+    Loads and caches the canonical metric & dimension definitions from `metrics.yaml` (SSOT).
+    Includes a zero-dependency parser fallback if PyYAML is not installed in the environment.
+    """
+    global _CACHED_METRICS_REGISTRY
+    if _CACHED_METRICS_REGISTRY:
+        return _CACHED_METRICS_REGISTRY
+    try:
+        import yaml
+        if _METRICS_YAML_PATH.exists():
+            data = yaml.safe_load(_METRICS_YAML_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _CACHED_METRICS_REGISTRY = data
+                return _CACHED_METRICS_REGISTRY
+    except Exception:
+        pass
+
+    # Zero-dependency fallback parser for metrics.yaml when PyYAML is not installed
+    if _METRICS_YAML_PATH.exists():
+        try:
+            raw_lines = _METRICS_YAML_PATH.read_text(encoding="utf-8").splitlines()
+            parsed: Dict[str, Dict[str, Any]] = {"metrics": {}, "dimensions": {}}
+            section = None
+            curr_item = None
+            for line in raw_lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                indent = len(line) - len(line.lstrip(" "))
+                if indent == 0 and stripped.endswith(":"):
+                    sec_name = stripped[:-1].strip()
+                    if sec_name in ("metrics", "dimensions"):
+                        section = sec_name
+                        curr_item = None
+                elif indent == 2 and stripped.endswith(":") and section:
+                    curr_item = stripped[:-1].strip()
+                    parsed[section][curr_item] = {}
+                elif indent == 4 and ":" in stripped and section and curr_item:
+                    k, v = stripped.split(":", 1)
+                    v_clean = v.strip().strip('"').strip("'")
+                    parsed[section][curr_item][k.strip()] = v_clean
+            _CACHED_METRICS_REGISTRY = parsed
+            return _CACHED_METRICS_REGISTRY
+        except Exception:
+            pass
+    return {"metrics": {}, "dimensions": {}}
 
 ALLOWED_SCHEMAS: Dict[str, Dict[str, str]] = {
     "v_order_lines": {
@@ -103,10 +156,19 @@ def get_allowed_columns_for_table(table_name: str) -> Set[str]:
 
 
 def get_schema_prompt_text() -> str:
-    """Produces structured markdown text of schema for LLM system prompt."""
+    """Produces structured markdown text of schema and SSOT metrics for LLM system prompt."""
     lines = ["## Database Schema (Semantic Views & Tables)"]
     for table_name in ["v_order_lines", "v_orders", "v_daily_revenue"]:
         lines.append(f"\n### View: `{table_name}`")
         for col, desc in ALLOWED_SCHEMAS[table_name].items():
             lines.append(f"- `{col}`: {desc}")
+
+    reg = get_metrics_registry().get("metrics", {})
+    if reg:
+        lines.append("\n## Canonical Metric Definitions (from `metrics.yaml` SSOT)")
+        for m_key, m_info in reg.items():
+            lines.append(
+                f"- `{m_key}` ({m_info.get('name', m_key)}): view `{m_info.get('source_view')}`, "
+                f"formula `{m_info.get('view_field')}` — {m_info.get('assumption', '')}"
+            )
     return "\n".join(lines)

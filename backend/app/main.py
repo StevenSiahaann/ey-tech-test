@@ -32,18 +32,23 @@ async def structured_logging_middleware(request: Request, call_next):
     response = await call_next(request)
     dur_ms = round((time.time() - t0) * 1000, 1)
     response.headers["X-Request-ID"] = req_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
     if request.url.path.startswith("/api"):
         logger.info(f"HTTP {request.method} {request.url.path} -> {response.status_code} ({dur_ms}ms)")
     return response
 
-# Enable CORS for Vite frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# PoC Best-Practice CORS Policy: explicit origin allowlist, no wildcard credentials reflection
+_allowed_origins = settings.get_cors_origins()
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "X-Request-ID"],
+    )
 
 app.include_router(api_router)
 

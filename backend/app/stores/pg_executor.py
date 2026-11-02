@@ -13,7 +13,8 @@ from backend.app.core.logger import get_logger
 logger = get_logger("stores.pg_executor")
 
 _duckdb_con = None
-_pg_localhost_offline = False
+_pg_offline_until: float = 0.0
+_PG_RETRY_COOLDOWN_SECONDS: float = 30.0
 
 
 def _get_duckdb_connection():
@@ -48,13 +49,15 @@ def _get_duckdb_connection():
 
 class QueryExecutionResult:
     def __init__(self, success: bool, columns: List[Dict[str, str]], rows: List[Dict[str, Any]], 
-                 row_count: int, execution_time_ms: float, error_message: Optional[str] = None):
+                 row_count: int, execution_time_ms: float, error_message: Optional[str] = None,
+                 engine: str = "duckdb"):
         self.success = success
         self.columns = columns
         self.rows = rows
         self.row_count = row_count
         self.execution_time_ms = execution_time_ms
         self.error_message = error_message
+        self.engine = engine
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -63,23 +66,26 @@ class QueryExecutionResult:
             "rows": self.rows,
             "row_count": self.row_count,
             "execution_time_ms": self.execution_time_ms,
-            "error_message": self.error_message
+            "error_message": self.error_message,
+            "engine": self.engine,
         }
 
 
 def execute_readonly_sql(sql: str, timeout_ms: Optional[int] = None) -> QueryExecutionResult:
     """
     Executes a sanitized SELECT SQL query.
-    Tries PostgreSQL connection first; if offline, transparently falls back to local DuckDB.
+    Tries PostgreSQL connection first; if offline, transparently falls back to local DuckDB
+    with a cooldown timer so transient PostgreSQL outages self-heal automatically.
     """
-    global _pg_localhost_offline
+    global _pg_offline_until
     t_start = time.time()
-    t_limit = timeout_ms or settings.SQL_TIMEOUT_MS
+    t_limit = int(timeout_ms or settings.SQL_TIMEOUT_MS)
     dsn = settings.DATABASE_URL_RO
 
-    # 1. Attempt PostgreSQL execution (skip repeated localhost probes once known offline)
+    # 1. Attempt PostgreSQL execution (with automatic recovery after cooldown)
     is_localhost_dsn = "localhost" in dsn or "127.0.0.1" in dsn
-    if not (is_localhost_dsn and _pg_localhost_offline):
+    if not (is_localhost_dsn and time.time() < _pg_offline_until):
+        conn = None
         try:
             import psycopg2
             from psycopg2.extras import RealDictCursor
@@ -103,19 +109,26 @@ def execute_readonly_sql(sql: str, timeout_ms: Optional[int] = None) -> QueryExe
                             row[k] = float(v)
 
                 dur_ms = round((time.time() - t_start) * 1000, 2)
-                conn.close()
+                _pg_offline_until = 0.0
                 logger.info(f"[PostgreSQL] Executed read-only SQL in {dur_ms}ms | rows={len(rows)}")
                 return QueryExecutionResult(
                     success=True,
                     columns=columns,
                     rows=rows,
                     row_count=len(rows),
-                    execution_time_ms=dur_ms
+                    execution_time_ms=dur_ms,
+                    engine="postgresql",
                 )
         except Exception as pg_err:
             if is_localhost_dsn:
-                _pg_localhost_offline = True
+                _pg_offline_until = time.time() + _PG_RETRY_COOLDOWN_SECONDS
             logger.debug(f"PostgreSQL connection unavailable ({pg_err}); falling back to embedded DuckDB engine.")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     # 2. Local Embedded DuckDB Fallback
     try:

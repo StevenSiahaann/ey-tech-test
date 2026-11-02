@@ -126,9 +126,9 @@ CREATE OR REPLACE VIEW v_daily_revenue AS
 WITH daily_agg AS (
     SELECT 
         o.order_date,
-        COUNT(o.order_id) AS total_orders,
-        COUNT(CASE WHEN o.status = 'Completed' THEN 1 END) AS completed_orders,
-        COUNT(CASE WHEN o.status = 'Cancelled' THEN 1 END) AS cancelled_orders,
+        COUNT(DISTINCT o.order_id) AS total_orders,
+        COUNT(DISTINCT CASE WHEN o.status = 'Completed' THEN o.order_id END) AS completed_orders,
+        COUNT(DISTINCT CASE WHEN o.status = 'Cancelled' THEN o.order_id END) AS cancelled_orders,
         COALESCE(SUM(CASE WHEN o.status = 'Completed' THEN (oi.qty * oi.unit_price - oi.discount) END), 0.00) AS daily_revenue,
         COALESCE(SUM(oi.qty * oi.unit_price - oi.discount), 0.00) AS daily_gmv
     FROM orders o

@@ -11,19 +11,22 @@ from backend.app.core.logger import log_security_event, get_logger
 logger = get_logger("safety.input_guard")
 
 CREDENTIAL_PATTERNS = [
-    r"\b(password|passwd|secret_key|api_key|credential|credentials|connection\s+string|database_url|db_url|env\s+var|pg_shadow|pg_authid|pg_user)\b",
+    r"\b(password|passwd|secret_key|api_key|connection\s+string|database_url|db_url|env\s+var|pg_shadow|pg_authid|pg_user)\b",
+    r"\b(?:db|database|system|server|admin|internal|login|api)\s+credentials?\b|\bcredentials?\s+(?:for|of|from|to)\s+(?:db|database|system|server|postgres)\b",
     r"\b(user\s+dan\s+password|username\s+dan\s+password|kredensial|kata\s+sandi|token\s+rahasia)\b",
 ]
 
 DESTRUCTIVE_PATTERNS = [
-    r"\b(drop|truncate|delete|alter|insert|update|create|grant|revoke)\s+(table|database|schema|user|role|column|from|into)\b",
-    r"\b(hapus|tambahkan|rubah|ubah|ganti|edit|update|delete|kosongkan)\s+(tabel|database|data|pesanan|harga|produk|toko|transaksi)\b",
+    r"\b(drop|truncate|delete|alter|insert|update|create|grant|revoke)\s+(table|database|schema|user|role|column|from|into|set)\b",
+    r"\bupdate\s+\w+\s+set\b",
+    r"\b(hapus|tambahkan|rubah|ubah|ganti|kosongkan|manipulasi)\s+(?:data\s+)?(tabel|database|data|pesanan|harga|produk|toko|transaksi)\b",
+    r"\b(?:tolong\s+|coba\s+)?(?:edit|delete|update)\s+(?:tabel|database|pesanan|harga|transaksi)\b",
 ]
 
 INJECTION_PATTERNS = [
     r"\b(ignore\s+(all\s+)?(previous|prior)\s+instructions?)\b",
     r"\b(abaikan\s+(semua\s+)?(instruksi|perintah|aturan)\s+sebelumnya)\b",
-    r"\b(system\s+prompt|bypass\s+guardrails?|jailbreak|dan\s+mode)\b",
+    r"\b(system\s+prompt|bypass\s+guardrails?|jailbreak|do\s+anything\s+now|(?:enable|activate|enter|switch\s+to|gunakan|aktifkan)\s+dan\s+mode)\b",
 ]
 
 
