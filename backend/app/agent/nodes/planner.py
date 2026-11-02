@@ -83,10 +83,13 @@ def _extract_metrics(msg_lower: str) -> List[str]:
     if re.search(r'\b(?:jumlah\s+order|total\s+order|banyaknya\s+pesanan|jumlah\s+pesanan|order\s+count|total\s+orders|berapa\s+order|berapa\s+pesanan)(?:nya)?\b', msg_lower):
         metrics.append("order_count")
 
-    # Check category_count BEFORE product_count so "berapa kategori produk" matches category_count, NOT product_count
-    if re.search(r'\b(?:jumlah\s+kategori|berapa\s+banyak\s+kategori|berapa\s+kategori|total\s+kategori|category\s+count|how\s+many\s+(?:product\s+)?categories)(?:nya)?\b', msg_lower):
+    # Check category_count and product_count (allowing co-aggregation when user asks both)
+    if re.search(r'\b(?:jumlah\s+kategori|berapa\s+banyak\s+kategori|berapa\s+kategori|total\s+kategori|category\s+count|how\s+many\s+(?:product\s+)?categories|dan\s+kategorinya|dan\s+berapa\s+kategori)(?:nya)?\b', msg_lower):
         metrics.append("category_count")
-    elif re.search(r'\b(?:jumlah\s+produk|berapa\s+banyak\s+produk|berapa\s+produk|total\s+produk|banyak\s+produk|product\s+count|how\s+many\s+products)(?:nya)?\b', msg_lower):
+
+    # To check product_count without false positive on "kategori produk" or "product categories", normalize them out
+    msg_no_cat_prod = re.sub(r'\b(?:kategori\s+produk|product\s+categories|product\s+category)\b', 'kategori', msg_lower)
+    if re.search(r'\b(?:jumlah\s+produk|berapa\s+banyak\s+produk|berapa\s+produk|total\s+produk|banyak\s+produk|product\s+count|how\s+many\s+products)(?:nya)?\b', msg_no_cat_prod):
         metrics.append("product_count")
 
     if re.search(r'\b(?:jumlah\s+store|jumlah\s+toko|berapa\s+banyak\s+toko|berapa\s+toko|berapa\s+store|total\s+store|store\s+count|how\s+many\s+stores)(?:nya)?\b', msg_lower):

@@ -61,6 +61,29 @@ def reconcile_olap_breakdown_filters(filters: List[Any], dimensions: List[str]) 
     return [f for f in filters if getattr(f, "field", None) not in grouping_dims]
 
 
+def are_metrics_coaggregatable(metrics: List[str]) -> bool:
+    """
+    Kimball / Semantic Layer Invariant:
+    Checks if all requested metrics belong to the exact same source view (fact grain).
+    Returns True if empty or if all metrics share the same view.
+    """
+    if not metrics:
+        return True
+    views = {METRIC_CONTRACTS[m].source_view for m in metrics if m in METRIC_CONTRACTS}
+    return len(views) <= 1
+
+
+def get_coaggregatable_view(metrics: List[str]) -> str:
+    """
+    Returns the single common source view for all metrics if coaggregatable.
+    Defaults to 'v_order_lines'.
+    """
+    for m in metrics:
+        if m in METRIC_CONTRACTS:
+            return METRIC_CONTRACTS[m].source_view
+    return "v_order_lines"
+
+
 def get_metrics_registry() -> Dict[str, Any]:
     """
     Loads and caches the canonical metric & dimension definitions from `metrics.yaml` (SSOT).

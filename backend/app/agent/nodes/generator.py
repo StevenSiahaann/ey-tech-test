@@ -152,7 +152,7 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
             f"SUM(order_revenue) AS total_revenue FROM v_orders{where_str}{group_by}{order_by}{limit_str};"
         )
 
-    # 5. Distinct Entity Count Metrics
+    # 5. Distinct Entity Count Metrics (Single or Co-Aggregated on Same View Grain)
     count_map = {
         "product_count": ("product_id", "total_products"),
         "store_count": ("store_id", "total_stores"),
@@ -160,14 +160,19 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
         "channel_count": ("channel", "total_channels"),
         "order_count": ("order_id", "total_orders"),
     }
-    for m_key, (col_id, alias) in count_map.items():
-        if m_key in plan.metrics:
-            view_name = "v_orders" if m_key == "order_count" else "v_order_lines"
-            dims = [d for d in plan.dimensions if d != col_id]
-            dim_select = f"{', '.join(dims)}, " if dims else ""
-            group_by = f" GROUP BY {', '.join(dims)}" if dims else ""
-            order_by = f" ORDER BY {alias} DESC" if dims else ""
-            return f"SELECT {dim_select}COUNT(DISTINCT {col_id}) AS {alias} FROM {view_name}{where_str}{group_by}{order_by};"
+    active_counts = [m for m in plan.metrics if m in count_map]
+    if active_counts and all(m in count_map for m in plan.metrics):
+        view_name = "v_orders" if all(m == "order_count" for m in active_counts) else "v_order_lines"
+        count_cols_used = {count_map[m][0] for m in active_counts}
+        dims = [d for d in plan.dimensions if d not in count_cols_used]
+        dim_select = f"{', '.join(dims)}, " if dims else ""
+        group_by = f" GROUP BY {', '.join(dims)}" if dims else ""
+
+        count_exprs = [f"COUNT(DISTINCT {count_map[m][0]}) AS {count_map[m][1]}" for m in active_counts]
+        first_alias = count_map[active_counts[0]][1]
+        order_by = f" ORDER BY {first_alias} DESC" if dims else ""
+        limit_str = f" LIMIT {plan.limit}" if plan.limit else ""
+        return f"SELECT {dim_select}{', '.join(count_exprs)} FROM {view_name}{where_str}{group_by}{order_by}{limit_str};"
 
     # 6. Standard Financial Metric Queries, Rankings, Breakdowns, Comparisons
     metric_exprs: List[str] = []
@@ -184,6 +189,12 @@ def compile_sql_from_plan(plan: QueryPlan) -> str:
         metric_exprs.append("ROUND((SUM(margin)::numeric / NULLIF(SUM(revenue), 0)::numeric) * 100, 2) AS margin_pct")
     if "cogs" in plan.metrics:
         metric_exprs.append("SUM(cogs) AS total_cogs")
+
+    # Co-aggregate any count metrics on v_order_lines alongside financial metrics
+    for c_metric in ("product_count", "category_count", "store_count", "channel_count"):
+        if c_metric in plan.metrics and c_metric in count_map:
+            col_id, alias = count_map[c_metric]
+            metric_exprs.append(f"COUNT(DISTINCT {col_id}) AS {alias}")
 
     if not metric_exprs:
         metric_exprs.append("SUM(revenue) AS total_revenue")

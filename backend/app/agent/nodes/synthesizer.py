@@ -482,7 +482,40 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
             label_clean = count_col.replace("total_", "").replace("jumlah_", "").replace("_", " ").title()
             unit_name = label_clean.lower()
 
-        if len(rows) == 1 and len(col_names) == 1:
+        count_cols_present = [c for c in col_names if c in ("total_products", "total_categories", "total_stores", "total_channels", "total_orders")]
+        if len(rows) == 1 and len(count_cols_present) > 1 and len(plan.dimensions) == 0:
+            summary_parts = []
+            for c in count_cols_present:
+                val = int(rows[0].get(c, 0))
+                if c == "total_products":
+                    c_lbl = "Total Products (SKUs)" if is_en else "Total Produk (SKU)"
+                    c_unit = f"{val:,} products" if is_en else f"{val:,} produk (SKU)"
+                elif c == "total_categories":
+                    c_lbl = "Total Product Categories" if is_en else "Total Kategori Produk"
+                    c_unit = f"{val:,} product categories" if is_en else f"{val:,} kategori produk"
+                elif c == "total_stores":
+                    c_lbl = "Total Stores" if is_en else "Total Toko"
+                    c_unit = f"{val:,} stores" if is_en else f"{val:,} toko cabang"
+                elif c == "total_channels":
+                    c_lbl = "Total Channels" if is_en else "Total Channel"
+                    c_unit = f"{val:,} sales channels" if is_en else f"{val:,} channel penjualan"
+                elif c == "total_orders":
+                    c_lbl = "Total Orders" if is_en else "Total Pesanan"
+                    c_unit = f"{val:,} orders" if is_en else f"{val:,} pesanan"
+                else:
+                    c_lbl = c.replace("total_", "").title()
+                    c_unit = f"{val:,} {c_lbl.lower()}"
+                kpis.append(KPICard(label=c_lbl, value=val, format="number", subtitle=plan.time_window_label))
+                summary_parts.append(c_unit)
+
+            conjunction = " and " if is_en else " serta "
+            summary = (
+                f"Recorded {conjunction.join(summary_parts)} ({plan.time_window_label})."
+                if is_en else
+                f"Tercatat {conjunction.join(summary_parts)} ({plan.time_window_label})."
+            )
+            insights.append(summary)
+        elif len(rows) == 1 and len(col_names) == 1:
             val = int(rows[0].get(count_col, 0))
             summary = (
                 f"There are {val:,} distinct {unit_name} recorded ({plan.time_window_label})."
@@ -600,7 +633,23 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
         margin_val = float(r0.get("total_margin") or r0.get("margin") or 0.0)
         cogs_val = float(r0.get("total_cogs") or r0.get("cogs") or 0.0)
 
-        if has_rev and has_margin:
+        if has_rev and has_gmv:
+            summary = (
+                f"For {plan.time_window_label}{scope_label}, Gross Merchandise Value (GMV) reached {format_idr(gmv_val, lang)} and Net Revenue reached {format_idr(rev_val, lang)}."
+                if is_en else
+                f"Pada periode {plan.time_window_label}{scope_label}, capaian GMV mencapai {format_idr(gmv_val, lang)} dan Net Revenue sebesar {format_idr(rev_val, lang)}."
+            )
+            kpis.append(KPICard(label=f"Total GMV{scope_label}", value=gmv_val, format="currency_idr", subtitle=plan.time_window_label))
+            kpis.append(KPICard(label=f"Net Revenue{scope_label}", value=rev_val, format="currency_idr", subtitle=plan.time_window_label))
+            if has_margin:
+                margin_pct = (margin_val / rev_val * 100.0) if rev_val > 0 else 0.0
+                kpis.append(KPICard(label=f"Gross Margin{scope_label}", value=margin_val, format="currency_idr", subtitle=f"Margin Ratio: {margin_pct:.1f}%"))
+            insights.append(
+                f"GMV represents total gross transaction value ({format_idr(gmv_val, lang)}), while Net Revenue accounts for completed orders ({format_idr(rev_val, lang)})."
+                if is_en else
+                f"GMV mencerminkan total nilai transaksi kotor ({format_idr(gmv_val, lang)}), sedangkan Net Revenue merepresentasikan transaksi berstatus selesai ({format_idr(rev_val, lang)})."
+            )
+        elif has_rev and has_margin:
             margin_pct = (margin_val / rev_val * 100.0) if rev_val > 0 else 0.0
             summary = (
                 f"For {plan.time_window_label}{scope_label}, Net Revenue reached {format_idr(rev_val, lang)} with Gross Margin of {format_idr(margin_val, lang)} ({margin_pct:.1f}% margin ratio)."

@@ -176,6 +176,34 @@ class TestPoCBestPractices(unittest.TestCase):
         self.assertNotIn("store_region = 'jawa'", sql_lower)
         self.assertEqual(len(r2.table.rows), 5, "Breakdown per region must return all 5 active regions")
 
+    def test_coaggregation_same_grain_multi_metrics(self):
+        """Verifies Spectrum 1 Co-Aggregation: multiple measures on the same semantic view execute in a single SQL."""
+        sid = "test-coagg-session"
+        session_store.clear_session(sid)
+
+        # 1. Product count and Category count
+        r_cat_prod = process_conversational_turn(sid, "ada berapa produk? dan berapa kategori produk?", language="id")
+        self.assertEqual(r_cat_prod.type, "answer")
+        self.assertIsNotNone(r_cat_prod.sql)
+        sql_lower = r_cat_prod.sql.lower()
+        self.assertIn("count(distinct product_id) as total_products", sql_lower)
+        self.assertIn("count(distinct product_category) as total_categories", sql_lower)
+        self.assertIn("from v_order_lines", sql_lower)
+        self.assertEqual(len(r_cat_prod.kpis), 2)
+        kpi_vals = {k.label: k.value for k in r_cat_prod.kpis}
+        self.assertEqual(kpi_vals.get("Total Produk (SKU)"), 28)
+        self.assertEqual(kpi_vals.get("Total Kategori Produk"), 5)
+
+        # 2. Financial metrics co-aggregation (GMV and Revenue MTD)
+        r_gmv_rev = process_conversational_turn(sid, "Berapa MTD GMV dan Revenue?", language="id")
+        self.assertEqual(r_gmv_rev.type, "answer")
+        self.assertIsNotNone(r_gmv_rev.sql)
+        sql_gmv = r_gmv_rev.sql.lower()
+        self.assertIn("sum(gmv) as total_gmv", sql_gmv)
+        self.assertIn("sum(revenue) as total_revenue", sql_gmv)
+        self.assertIn("from v_order_lines", sql_gmv)
+        self.assertEqual(len(r_gmv_rev.kpis), 2)
+
     def test_sql_validator_cte_column_check_and_function_guard(self):
         """Verifies CTE queries cannot bypass column allowlist validation."""
         bad_cte = """
