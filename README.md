@@ -212,6 +212,6 @@ PYTHONPATH=. python3 backend/eval/eval_harness.py
 
 ## Documentation Links
 
-- **Penjelasan Teknis & Arsitektur Lengkap (Bahasa Indonesia):** [docs/TECHNICAL_DEEP_DIVE_ID.md](docs/TECHNICAL_DEEP_DIVE_ID.md)
+- **Enterprise Technical Deep Dive (English):** [docs/TECHNICAL_DEEP_DIVE.md](docs/TECHNICAL_DEEP_DIVE.md)
 - **Architecture Deep-Dive (English):** [docs/architecture.md](docs/architecture.md)
 - **Azure Terraform IaC Guide:** [infra/terraform/README.md](infra/terraform/README.md)

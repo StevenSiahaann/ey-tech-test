@@ -54,15 +54,16 @@ flowchart TD
 ## 2. Key Architecture Pillars
 
 ### 2.1 Commander + 5 Specialized Sub-Agents
-Instead of a monolithic prompt, `plan_query` acts as the **Commander** that resolves time windows, links database entities (including negation operators `!=` and `NOT IN`), rewrites follow-ups into self-contained `standalone_query` strings, and routes execution to one of 5 specialists:
+Instead of a monolithic prompt, `plan_query` acts as the **Commander** that resolves time windows, links database entities (including negation operators `!=` and `NOT IN`), rewrites follow-ups into self-contained `standalone_query` strings, enforces the **OLAP Breakdown Invariant** (clearing redundant equality filters on grouping dimensions via `reconcile_olap_breakdown_filters()`), and routes execution to one of 5 specialists:
 1. **`ClarificationGuardSpecialist`:** Handles 5 ambiguity classes (*Scope Ambiguity on Follow-Up*, *KPI Metric Ambiguity*, *Incomplete Entity Fragment*, *Orphan Deictic Reference*, and *Out-of-Scope Guardrail*) by returning interactive confirmation options.
 2. **`ConversationalAdvisorSpecialist`:** Handles conceptual questions (*"Ini berarti apa artinya cancel rate?"*, *"Apa bedanya GMV sama Net Revenue?"*), benchmark evaluations (*"Apakah angka ini bagus atau bahaya?"*), and strategic brainstorming without executing redundant SQL queries.
 3. **`CatalogMetadataSpecialist`:** Handles catalog-level count and listing queries (`category_count`, `product_count`, `store_count`, `channel_count`, and distinct entity exploration) over all-time scope.
-4. **`AnalyticalSQLSpecialist`:** Compiles multi-metric queries, top-N rankings, dimensional breakdowns, and period comparisons over `v_order_lines` and `v_orders`, backed by a post-LLM semantic alignment guardrail.
+4. **`AnalyticalSQLSpecialist`:** Compiles same-grain multi-metric co-aggregations, top-N rankings, dimensional breakdowns, and period comparisons over `v_order_lines` and `v_orders`, backed by a post-LLM semantic alignment guardrail and projection-to-order reconciliation.
 5. **`AnomalyDiagnosticSpecialist`:** Targets `v_daily_revenue` to isolate dates where daily revenue dropped by `>30%` relative to the preceding 7-day rolling window average.
 
 ### 2.2 The Semantic Layer (Zero Hallucination of Business Metrics)
-Rather than requiring the LLM to write error-prone raw joins across 5 base tables (`customers`, `stores`, `products`, `orders`, `order_items`), the system deploys pre-materialized **Semantic Views**:
+Rather than requiring the LLM to write error-prone raw joins across 5 base tables (`customers`, `stores`, `products`, `orders`, `order_items`), the system deploys pre-materialized **Semantic Views** governed by an **Active Metric Contract SSOT** (`schema_registry.py` and `metrics.yaml`):
+- **Metric Contracts (`MetricContract`):** Defines canonical SQL expressions, output aliases, default sort directions, and grain view mappings for all 12 metrics (`gmv`, `revenue`, `margin`, `margin_pct`, `cogs`, `aov`, `cancel_rate`, `order_count`, `category_count`, `product_count`, `store_count`, `channel_count`).
 - `v_order_lines`: Line-level pre-calculations:
   * `GMV = Σ(qty × unit_price − discount)` across all order statuses
   * `Net Revenue = Σ(qty × unit_price − discount)` strictly for `status = 'Completed'`
@@ -70,6 +71,8 @@ Rather than requiring the LLM to write error-prone raw joins across 5 base table
   * `Gross Margin = Net Revenue − COGS`
 - `v_orders`: Order-level aggregations (prevents line-item fan-out when calculating Cancel Rate, Total Orders, and AOV).
 - `v_daily_revenue`: 7-day rolling window average for deterministic anomaly detection.
+- **Same-Grain Multi-Metric Co-Aggregation:** Enables single-scan SQL compilation when users ask compound metric questions within the same fact grain (e.g. product count + category count, or GMV + Revenue).
+- **Projection-to-Order Reconciliation:** Automatically reconciles `ORDER BY` aliases with projected `SELECT` expressions, eliminating column hallucination errors before AST validation.
 
 ### 2.3 Layered Defense Guardrails (Security in Depth)
 1. **L1 Input Guard:** Rejects instructions containing `DROP`, `DELETE`, `UPDATE`, prompt injections, or system prompt extraction.
