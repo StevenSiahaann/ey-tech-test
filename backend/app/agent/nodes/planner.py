@@ -46,19 +46,19 @@ def _extract_metrics(msg_lower: str) -> List[str]:
     if re.search(r'\b(?:cogs|hpp|harga\s+pokok|biaya\s+modal|cost\s+of\s+goods)(?:nya)?\b', msg_lower):
         metrics.append("cogs")
 
-    if re.search(r'\b(?:jumlah\s+order|total\s+order|banyaknya\s+pesanan|jumlah\s+pesanan|order\s+count|total\s+orders|berapa\s+order|berapa\s+pesanan)\b', msg_lower):
+    if re.search(r'\b(?:jumlah\s+order|total\s+order|banyaknya\s+pesanan|jumlah\s+pesanan|order\s+count|total\s+orders|berapa\s+order|berapa\s+pesanan)(?:nya)?\b', msg_lower):
         metrics.append("order_count")
 
     # Check category_count BEFORE product_count so "berapa kategori produk" matches category_count, NOT product_count
-    if re.search(r'\b(?:jumlah\s+kategori|berapa\s+banyak\s+kategori|berapa\s+kategori|total\s+kategori|category\s+count|how\s+many\s+(?:product\s+)?categories)\b', msg_lower):
+    if re.search(r'\b(?:jumlah\s+kategori|berapa\s+banyak\s+kategori|berapa\s+kategori|total\s+kategori|category\s+count|how\s+many\s+(?:product\s+)?categories)(?:nya)?\b', msg_lower):
         metrics.append("category_count")
-    elif re.search(r'\b(?:jumlah\s+produk|berapa\s+banyak\s+produk|berapa\s+produk|total\s+produk|banyak\s+produk|product\s+count|how\s+many\s+products)\b', msg_lower):
+    elif re.search(r'\b(?:jumlah\s+produk|berapa\s+banyak\s+produk|berapa\s+produk|total\s+produk|banyak\s+produk|product\s+count|how\s+many\s+products)(?:nya)?\b', msg_lower):
         metrics.append("product_count")
 
-    if re.search(r'\b(?:jumlah\s+store|jumlah\s+toko|berapa\s+banyak\s+toko|berapa\s+toko|berapa\s+store|total\s+store|store\s+count|how\s+many\s+stores)\b', msg_lower):
+    if re.search(r'\b(?:jumlah\s+store|jumlah\s+toko|berapa\s+banyak\s+toko|berapa\s+toko|berapa\s+store|total\s+store|store\s+count|how\s+many\s+stores)(?:nya)?\b', msg_lower):
         metrics.append("store_count")
 
-    if re.search(r'\b(?:jumlah\s+channel|berapa\s+channel|total\s+channel|channel\s+count|how\s+many\s+channels)\b', msg_lower):
+    if re.search(r'\b(?:jumlah\s+channel|berapa\s+channel|total\s+channel|channel\s+count|how\s+many\s+channels)(?:nya)?\b', msg_lower):
         metrics.append("channel_count")
 
     return metrics
@@ -265,20 +265,67 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
         prev_plan_dict
         and is_anaphoric_followup
         and not is_list_followup
+        and not any(m in extracted_metrics for m in ("product_count", "category_count", "store_count", "channel_count"))
         and re.search(
-            r'\b(?:kategori\s+apa|di\s+kategori|masuk\s+kategori|what\s+category|which\s+category|'
-            r'kota\s+mana|di\s+kota\s+apa|which\s+city|region\s+mana|di\s+region\s+apa|which\s+region|'
-            r'channel\s+apa|segmen\s+apa)\b',
+            r'\b(?:kategori\s+apa|di\s+kategori|masuk\s+kategori|kategorinya|ada\s+kategori(?:nya)?|'
+            r'what\s+category|which\s+category|kota\s+mana|di\s+kota\s+apa|kotanya|which\s+city|'
+            r'region\s+mana|di\s+region\s+apa|which\s+region|channel\s+apa|channelnya|segmen\s+apa|segmennya)\b',
             msg_lower
         )
     )
 
+    # Scope Ambiguity Check on Follow-up: e.g. "ini ada berapa produk? dan apakah ada kategorinya?"
+    # right after a Top-N product ranking turn (ambiguous between the Top-N subset vs full 28-SKU catalog)
+    if prev_plan_dict:
+        prev_plan_tmp = QueryPlan(**prev_plan_dict) if isinstance(prev_plan_dict, dict) else prev_plan_dict
+        has_deictic = bool(re.search(r'\b(?:ini|itu|tadi|tersebut|these|those)\b', msg_lower))
+        asks_count_and_cat = (
+            ("product_count" in extracted_metrics or "category_count" in extracted_metrics)
+            and bool(re.search(r'\b(?:kategori|kategorinya|category|categories)\b', msg_lower))
+        )
+        if has_deictic and asks_count_and_cat and prev_plan_tmp.limit and "product_name" in prev_plan_tmp.dimensions:
+            plan.needs_clarification = True
+            plan.intent = "clarification_reply"
+            n_lim = prev_plan_tmp.limit
+            win_lbl = prev_plan_tmp.time_window_label
+            if lang == "en":
+                plan.clarification_question = (
+                    f"Your question ('{msg}') can refer either to the Top {n_lim} products from your previous query "
+                    f"({win_lbl}) or to the entire product catalog (28 products across 5 categories). "
+                    f"Which analysis would you like to view?"
+                )
+                plan.clarification_options = [
+                    {"label": f"Categories for the Top {n_lim} Products ({win_lbl})", "value": "Ini produknya di kategori apa?"},
+                    {"label": "All 5 Product Categories & 28 Total Products (Full Catalog)", "value": "Daftar kategori produk beserta jumlah produknya"},
+                    {"label": f"Revenue Breakdown by Category ({win_lbl})", "value": "Breakdown per kategori"}
+                ]
+            else:
+                plan.clarification_question = (
+                    f"Kata rujukan 'ini' pada pertanyaan Anda memiliki dua cakupan analisis: apakah Anda ingin melihat "
+                    f"kategori untuk Top {n_lim} produk dari periode {win_lbl}, atau total keseluruhan produk (28 SKU) "
+                    f"beserta 5 kategori di seluruh katalog database?"
+                )
+                plan.clarification_options = [
+                    {"label": f"Kategori dari Top {n_lim} Produk Sebelumnya ({win_lbl})", "value": "Ini produknya di kategori apa?"},
+                    {"label": "Seluruh Kategori & Total Produk di Database (5 Kategori, 28 SKU)", "value": "Daftar kategori produk beserta jumlah produknya"},
+                    {"label": f"Rincian Revenue per Kategori Produk ({win_lbl})", "value": "Breakdown per kategori"}
+                ]
+            return _finalize_commander_plan(msg, plan, lang, "Needs Clarification (Scope Disambiguation: Subset vs Full Catalog)")
+
+    is_catalog_count_turn = (
+        any(m in extracted_metrics for m in ("category_count", "product_count", "store_count", "channel_count"))
+        or (plan.intent == "exploratory" and not is_list_followup and not is_entity_attribute_followup)
+    )
+
     is_genuine_followup = (
-        is_breakdown_followup
-        or is_top_store_followup
-        or is_list_followup
-        or is_entity_attribute_followup
-        or is_anaphoric_followup
+        not is_catalog_count_turn
+        and (
+            is_breakdown_followup
+            or is_top_store_followup
+            or is_list_followup
+            or is_entity_attribute_followup
+            or is_anaphoric_followup
+        )
     )
 
     if prev_plan_dict and is_genuine_followup:
@@ -455,7 +502,7 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
         plan.intent = "out_of_scope"
         return _finalize_commander_plan(msg, plan, lang, "Out of Scope (Domain Scope Guardrail)")
 
-    # 6. Ambiguity Gatekeeper: Proactive Clarification Loop
+    # 6. Ambiguity Gatekeeper: Proactive Clarification Loop (ClarificationGuardSpecialist)
     words = msg_lower.split()
     is_pure_greeting = (
         len(words) <= 3 and any(w in ["halo", "hi", "hey", "pagi", "siang", "sore", "malam", "assalamualaikum", "menu", "bantu", "help", "hello"] for w in words)
@@ -463,6 +510,94 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
     is_vague_request = (
         msg_lower in ["analisis dong", "tolong analisis", "rekomendasi analisis", "apa yang bisa kamu lakukan", "mau tanya data", "cek data", "cek", "analisis", "analyze", "help me analyze"]
     )
+
+    # 6a. Orphan Follow-Up / Deictic Reference in a Fresh Session (no prior turn in session)
+    is_orphan_followup = (
+        not prev_plan_dict
+        and not extracted_metrics
+        and not plan.filters
+        and (
+            is_list_followup
+            or is_breakdown_followup
+            or bool(re.search(r'\b(?:ini|itu|tadi|tersebut|barusan|di\s+atas)\b', msg_lower))
+        )
+    )
+
+    if is_orphan_followup:
+        plan.needs_clarification = True
+        plan.intent = "clarification_reply"
+        if lang == "en":
+            plan.clarification_question = (
+                "Your question references a previous result, but this is the start of a new session. "
+                "Which baseline analysis would you like to run first?"
+            )
+            plan.clarification_options = [
+                {"label": "Top 5 Products by Revenue Last Month", "value": "Top 5 products by revenue last month?"},
+                {"label": "All Product Categories & SKU Counts", "value": "Daftar kategori produk beserta jumlah produknya"},
+                {"label": "MTD Revenue & Margin for FMCG in Java", "value": "MTD Revenue and margin for FMCG in Java?"}
+            ]
+        else:
+            plan.clarification_question = (
+                "Pertanyaan Anda merujuk pada hasil sebelumnya, namun belum ada riwayat analisis di sesi ini. "
+                "Analisis awal mana yang ingin Anda jalankan terlebih dahulu?"
+            )
+            plan.clarification_options = [
+                {"label": "Top 5 Produk Berdasarkan Revenue Bulan Lalu", "value": "Top 5 produk berdasarkan revenue bulan lalu?"},
+                {"label": "Daftar Kategori Produk & Jumlah SKU", "value": "Daftar kategori produk beserta jumlah produknya"},
+                {"label": "Revenue & Margin FMCG di Jawa (MTD)", "value": "Revenue dan margin MTD untuk FMCG di Jawa?"}
+            ]
+        return _finalize_commander_plan(msg, plan, lang, "Needs Clarification (Orphan Deictic Reference)")
+
+    # 6b. Ambiguous KPI / Performance Inquiry without Explicit Metric ("Bagaimana performa...", "Toko terbaik...", "Produk paling bagus...")
+    has_ambiguous_perf_term = bool(re.search(
+        r'\b(?:performa|kinerja|paling\s+bagus|terbaik|terburuk|unggul|evaluasi|kondisi|performance|performing|best|worst|evaluate|how\s+is)\b',
+        msg_lower
+    ))
+    is_incomplete_entity_fragment = (
+        not prev_plan_dict
+        and not extracted_metrics
+        and plan.intent not in ("exploratory", "anomaly", "tiering", "out_of_scope")
+        and not bool(re.search(
+            r'\b(?:top|bottom|tertinggi|terendah|terbesar|terlaris|paling|vs\.?|versus|bandingkan|perbandingan|compare|breakdown|rincian|per\s+|by\s+|berapa|jumlah|total|daftar|list)\b',
+            msg_lower
+        ))
+        and (len(plan.filters) > 0 or tw.is_explicit)
+    )
+
+    if (not prev_plan_dict and not extracted_metrics and plan.intent not in ("exploratory", "anomaly", "tiering", "out_of_scope")) and (
+        has_ambiguous_perf_term or is_incomplete_entity_fragment
+    ):
+        plan.needs_clarification = True
+        plan.intent = "clarification_reply"
+
+        # Build context suffix from any detected entity filters and time window
+        filter_vals = [str(f.value) if not isinstance(f.value, list) else ", ".join(str(v) for v in f.value) for f in plan.filters]
+        ctx_entity = f" untuk {', '.join(filter_vals)}" if filter_vals else ""
+        ctx_entity_en = f" for {', '.join(filter_vals)}" if filter_vals else ""
+        ctx_time = f" ({plan.time_window_label})" if tw.is_explicit else " bulan ini"
+        ctx_time_en = f" ({plan.time_window_label})" if tw.is_explicit else " this month"
+
+        if lang == "en":
+            plan.clarification_question = (
+                f"Your request ('{msg}') does not specify an exact financial KPI metric. "
+                f"Which metric would you like to use to evaluate performance?"
+            )
+            plan.clarification_options = [
+                {"label": f"By Net Revenue & Gross Margin{ctx_entity_en}", "value": f"Revenue and margin{ctx_entity_en}{ctx_time_en}?"},
+                {"label": f"By Gross Merchandise Value (GMV){ctx_entity_en}", "value": f"GMV{ctx_entity_en}{ctx_time_en}?"},
+                {"label": f"Top 5 Products by Net Revenue{ctx_entity_en}", "value": f"Top 5 products by revenue{ctx_entity_en}{ctx_time_en}?"}
+            ]
+        else:
+            plan.clarification_question = (
+                f"Pertanyaan Anda ('{msg}') belum menyebutkan indikator metrik KPI secara spesifik. "
+                f"Metrik mana yang ingin Anda gunakan untuk analisis ini?"
+            )
+            plan.clarification_options = [
+                {"label": f"Berdasarkan Net Revenue & Gross Margin{ctx_entity}", "value": f"Revenue dan margin{ctx_entity}{ctx_time}?"},
+                {"label": f"Berdasarkan Total GMV (Transaksi Kotor){ctx_entity}", "value": f"GMV{ctx_entity}{ctx_time}?"},
+                {"label": f"Top 5 Produk Berdasarkan Revenue{ctx_entity}", "value": f"Top 5 produk berdasarkan revenue{ctx_entity}{ctx_time}?"}
+            ]
+        return _finalize_commander_plan(msg, plan, lang, "Needs Clarification (Ambiguous KPI Metric Disambiguation)")
 
     if is_pure_greeting or is_vague_request:
         plan.needs_clarification = True
@@ -598,8 +733,11 @@ def _detect_metrics_and_intent(
             plan.dimensions = ["store_city"]
         elif re.search(r'\b(?:per\s+region|per\s+wilayah|by\s+region)\b', msg_lower):
             plan.dimensions = ["store_region"]
-        elif re.search(r'\b(?:per\s+kategori|per\s+category|by\s+category)\b', msg_lower) and "category_count" not in plan.metrics:
+        elif re.search(r'\b(?:per\s+kategori|per\s+category|by\s+category|kategori|kategorinya|category|categories)\b', msg_lower) and "category_count" not in plan.metrics:
+            plan.intent = "exploratory"
             plan.dimensions = ["product_category"]
+            plan.metrics = ["product_count"]
+            return extracted_metrics
         else:
             plan.dimensions = []
     elif mentions_category_phrase and not re.search(r'\b(?:top\s+\d+\s+produk|produk\s+terlaris|produk\s+tertinggi)\b', msg_lower):

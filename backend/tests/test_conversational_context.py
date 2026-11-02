@@ -106,6 +106,50 @@ class TestConversationalContext(unittest.TestCase):
         sql2 = compile_sql_from_plan(p2)
         self.assertIn("product_category NOT IN ('FMCG', 'Electronics')", sql2)
 
+    def test_proactive_clarification_on_scope_and_kpi_ambiguity(self):
+        """
+        Tests proactive confirmation:
+        1. 'ini ada berapa produk? dan apakah ada kategorinya?' after 'Top 5 produk berdasarkan revenue bulan lalu?'
+           triggers Scope Clarification (Top 5 Subset vs Full 28-SKU Catalog), and clicking either option resolves cleanly.
+        2. 'Bagaimana performa region Jawa bulan ini?' triggers KPI Metric Clarification.
+        3. 'Breakdown per city' in a brand-new session triggers Orphan Context Clarification.
+        """
+        sid = "unit_test_proactive_clarification"
+        session_store.clear_session(sid)
+
+        # 1. Orphan follow-up on empty session
+        r_orphan = process_conversational_turn(sid, "Breakdown per city", language="id")
+        self.assertEqual(r_orphan.type, "clarification")
+        self.assertIsNotNone(r_orphan.clarification)
+        self.assertEqual(len(r_orphan.clarification.options), 3)
+
+        # 2. Ambiguous KPI performance query
+        r_perf = process_conversational_turn(sid, "Bagaimana performa untuk region Jawa bulan ini?", language="id")
+        self.assertEqual(r_perf.type, "clarification")
+        self.assertIn("Jawa", r_perf.clarification.options[0]["value"])
+
+        # 3. Top 5 products -> ambiguous 'ini ada berapa produk? dan apakah ada kategorinya?'
+        r_top5 = process_conversational_turn(sid, "Top 5 produk berdasarkan revenue bulan lalu?", language="en")
+        self.assertEqual(r_top5.type, "answer")
+        self.assertEqual(len(r_top5.table.rows), 5)
+
+        r_ambig = process_conversational_turn(sid, "ini ada berapa produk? dan apakah ada kategorinya?", language="en")
+        self.assertEqual(r_ambig.type, "clarification")
+        self.assertEqual(len(r_ambig.clarification.options), 3)
+
+        # Clicking Option 1 ('Ini produknya di kategori apa?') preserves Turn 1 context and shows categories of the Top 5 products
+        opt1_val = r_ambig.clarification.options[0]["value"]
+        r_opt1 = process_conversational_turn(sid, opt1_val, language="en")
+        self.assertEqual(r_opt1.type, "answer")
+        self.assertIn("product_category", r_opt1.sql.lower())
+
+        # Clicking Option 2 ('Daftar kategori produk beserta jumlah produknya') shows 5 categories and 28 total products
+        opt2_val = r_ambig.clarification.options[1]["value"]
+        r_opt2 = process_conversational_turn(sid, opt2_val, language="en")
+        self.assertEqual(r_opt2.type, "answer")
+        self.assertEqual(r_opt2.kpis[0].value, 5)
+        self.assertEqual(r_opt2.kpis[1].value, 28)
+
 
 if __name__ == "__main__":
     unittest.main()

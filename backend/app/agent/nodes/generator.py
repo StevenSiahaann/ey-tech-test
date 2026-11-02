@@ -310,13 +310,20 @@ SQL:"""
             raw_sql += ";"
 
         # Post-LLM Semantic Alignment Guardrail:
-        # 1. Ensure planned dimensions are not dropped by the LLM (e.g. during short follow-ups like 'apa aja?')
+        # 1. Ensure all non-ID planned dimensions are present in the generated SQL
         # 2. Ensure multi-row GROUP BY queries always include ORDER BY
+        # 3. Prevent COUNT(*) when distinct entity counts (product_count, store_count, etc.) are requested
         sql_lower = raw_sql.lower()
         if plan:
-            if plan.dimensions and not any(d.lower() in sql_lower for d in plan.dimensions):
+            required_dims = [d.lower() for d in plan.dimensions if not d.endswith("_id")]
+            is_distinct_count = any(
+                m in plan.metrics for m in ("product_count", "store_count", "category_count", "channel_count")
+            )
+            if required_dims and not all(d in sql_lower for d in required_dims):
                 raw_sql = compile_sql_from_plan(plan)
             elif "group by" in sql_lower and "order by" not in sql_lower:
+                raw_sql = compile_sql_from_plan(plan)
+            elif is_distinct_count and ("count(*)" in sql_lower or "group by product_id" in sql_lower or "group by store_id" in sql_lower):
                 raw_sql = compile_sql_from_plan(plan)
 
         return {"raw_sql": raw_sql, "current_step": "Semantic SQL Generated via LLM"}
