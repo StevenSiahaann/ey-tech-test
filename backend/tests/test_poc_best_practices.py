@@ -128,6 +128,32 @@ class TestPoCBestPractices(unittest.TestCase):
         bad2 = check_input_safety("UPDATE orders SET status = 'Completed'")
         self.assertFalse(bad2.is_safe)
 
+    def test_conversational_triage_and_domain_deflection(self):
+        """Verifies enterprise 3-tier triage: greeting, bot identity, and out-of-scope deflection."""
+        # 1. 'sekarang jam berapa?' must not fuzzy match to 'Semarang' and must be deflected
+        filters_time = extract_dimension_filters("sekarang jam berapa?")
+        city_filters = [f for f in filters_time if f.field == "store_city"]
+        self.assertEqual(len(city_filters), 0, "Word 'sekarang' must NOT fuzzy match to 'Semarang'")
+
+        sid = "test-triage-deflection"
+        session_store.clear_session(sid)
+        r_time = process_conversational_turn(sid, "sekarang jam berapa?", language="id")
+        self.assertEqual(r_time.type, "refusal")
+        self.assertIsNone(r_time.sql)
+        self.assertIn("luar cakupan", r_time.summary.lower())
+
+        # 2. 'kamu siapa?' must return identity and capabilities without running SQL
+        r_who = process_conversational_turn(sid, "kamu siapa?", language="id")
+        self.assertEqual(r_who.type, "discussion")
+        self.assertIsNone(r_who.sql)
+        self.assertIn("conversational bi", r_who.summary.lower())
+
+        # 3. 'hi' greeting must return warm welcome without ambiguous parameter error
+        r_hi = process_conversational_turn(sid, "hi", language="id")
+        self.assertEqual(r_hi.type, "discussion")
+        self.assertIsNone(r_hi.sql)
+        self.assertIn("halo", r_hi.summary.lower())
+
     def test_sql_validator_cte_column_check_and_function_guard(self):
         """Verifies CTE queries cannot bypass column allowlist validation."""
         bad_cte = """

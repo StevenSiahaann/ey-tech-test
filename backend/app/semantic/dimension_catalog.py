@@ -261,6 +261,12 @@ def extract_dimension_filters(message: str) -> List[FilterItem]:
         "kemarin", "yesterday", "terakhir", "januari", "februari", "maret", "april", "agustus",
         "september", "oktober", "november", "desember", "metode", "pembayaran", "payment",
         "strategi", "definisi", "artinya", "maksudnya", "penjualan", "omset", "omzet", "transaksi",
+        "sekarang", "besok", "lusa", "kapan", "siapa", "kenapa", "mengapa", "bagaimana", "gimana",
+        "apakah", "tentang", "seperti", "adalah", "apapun", "dimana", "kemana", "darimana",
+        "pukul", "waktu", "tanggal", "menit", "detik", "namun", "tetapi", "karena", "antara",
+        "hanya", "sudah", "belum", "sedang", "masih", "akan", "dapat", "bisa", "tolong",
+        "mohon", "silakan", "terima", "kasih", "thanks", "thank", "hello", "today", "tomorrow",
+        "current", "clock", "date", "which", "where", "what", "when", "about"
     }
     for field in ("store_city", "store_region", "product_category", "product_brand"):
         if field in matched_fields:
@@ -272,7 +278,7 @@ def extract_dimension_filters(message: str) -> List[FilterItem]:
             wl = w.lower()
             if wl in stop_fuzzy or wl in canon_map:
                 continue
-            close = difflib.get_close_matches(wl, list(canon_map.keys()), n=1, cutoff=0.82)
+            close = difflib.get_close_matches(wl, list(canon_map.keys()), n=1, cutoff=0.86)
             if close:
                 resolved_val = canon_map[close[0]]
                 pos_idx = msg_lower.find(wl)

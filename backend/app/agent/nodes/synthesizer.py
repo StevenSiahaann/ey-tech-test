@@ -948,8 +948,111 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
     asks_time_seg_def = bool(re.search(r'\b(?:mtd|month\s+to\s+date|ytd|year\s+to\s+date|aov|average\s+order|vip|corporate|segmen\s+pelanggan)\b', msg_lower))
     asks_explicit_domain_term = asks_gmv_vs_rev or asks_channel_def or asks_category_def or asks_time_seg_def
 
+    is_greeting = (
+        len(msg_lower.split()) <= 3
+        and any(w in ["halo", "hi", "hey", "hai", "hello", "pagi", "siang", "sore", "malam", "assalamualaikum", "menu", "bantu", "help"] for w in msg_lower.split())
+    )
+    is_identity = bool(re.search(
+        r'\b(?:kamu\s+(?:siapa|apa|bot\s+apa|sistem\s+apa)|siapa\s+(?:kamu|anda)|anda\s+siapa|'
+        r'who\s+are\s+you|what\s+are\s+you|what\s+is\s+this\s+(?:agent|bot|system)|'
+        r'kamu\s+bisa\s+(?:apa|bantu\s+apa)|bisa\s+bantu\s+apa|apa\s+yang\s+bisa\s+kamu\s+lakukan|'
+        r'bisa\s+apa\s+saja|fitur\s+apa\s+saja|tugas\s+kamu|fungsi\s+kamu|'
+        r'what\s+can\s+you\s+do|how\s+can\s+you\s+help|what\s+do\s+you\s+do)\b',
+        msg_lower
+    ))
+
+    # CASE 0A: Greeting & Welcome
+    if is_greeting:
+        summary = (
+            "Hello! I am your Enterprise Retail Data Agent AI. Which sales, revenue, margin, or product metrics would you like to analyze today?"
+            if is_en else
+            "Halo! Saya adalah Data Agent AI untuk analisis transaksi dan performa retail. Ada metrik penjualan, performa toko, atau tren produk yang ingin Anda periksa hari ini?"
+        )
+        insights = (
+            [
+                "Data Coverage: Connected directly to retail analytical database covering 5 regions (Java, Sumatra, Kalimantan, Sulawesi, Bali & Nusa Tenggara).",
+                "Key Metrics Available: Net Revenue, GMV, Gross Margin, Cancel Rate, AOV, and daily sales anomaly detection.",
+                "Choose one of the recommended analysis starters below to begin immediately:"
+            ]
+            if is_en else
+            [
+                "Cakupan Data: Terhubung langsung ke database analitik retail yang mencakup 5 region (Jawa, Sumatera, Kalimantan, Sulawesi, Bali & Nusa Tenggara).",
+                "Metrik Tersedia: Net Revenue, GMV, Gross Margin, Cancel Rate, AOV, serta deteksi anomali penjualan harian.",
+                "Pilih salah satu analisis rekomendasi di bawah ini untuk langsung memulai eksplorasi data:"
+            ]
+        )
+        recommendations = (
+            [
+                "Quick Start: Click any starter query below to explore your business data instantly."
+            ]
+            if is_en else
+            [
+                "Mulai Cepat: Klik salah satu tombol analisis di bawah untuk langsung mengeksplorasi data bisnis Anda."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "MTD GMV for Java Region", "value": "MTD GMV for Java region?"},
+                {"label": "Top 5 Products by Revenue Last Month", "value": "Top 5 products by revenue last month?"},
+                {"label": "MTD Revenue & Margin for FMCG in Java", "value": "MTD Revenue and margin for FMCG in Java?"},
+                {"label": "Cancel Rate This Month", "value": "Cancel rate this month?"}
+            ]
+            if is_en else
+            [
+                {"label": "GMV MTD Region Jawa", "value": "GMV MTD untuk region Jawa?"},
+                {"label": "Top 5 Produk Revenue Tertinggi Bulan Lalu", "value": "Top 5 produk berdasarkan revenue bulan lalu?"},
+                {"label": "Revenue & Margin FMCG di Jawa (MTD)", "value": "Revenue dan margin MTD untuk FMCG di Jawa?"},
+                {"label": "Cancel Rate Bulan Ini", "value": "Cancel rate bulan ini?"}
+            ]
+        )
+
+    # CASE 0B: Bot Identity & Capabilities
+    elif is_identity:
+        summary = (
+            "I am an Enterprise Conversational BI Agent specialized in retail transaction analytics, store performance, and omnichannel commerce."
+            if is_en else
+            "Saya adalah Enterprise Conversational BI Agent yang dirancang khusus untuk menganalisis data transaksi, performa penjualan, dan operasional toko retail."
+        )
+        insights = (
+            [
+                "Database Scope: 31 stores across 17 cities in 5 regions, 28 distinct products across 5 categories, and 5 sales channels.",
+                "Analytics Capabilities: Financial KPIs (Revenue, GMV, Margin, AOV, Cancel Rate), multi-dimensional breakdowns, top/bottom rankings, and anomaly diagnostics.",
+                "Zero-Hallucination Governance: Strictly computes metrics from PostgreSQL views (`v_daily_revenue`, `v_orders`, `v_order_lines`) via AST-validated SQL."
+            ]
+            if is_en else
+            [
+                "Cakupan Database: 31 cabang toko di 17 kota dan 5 region, 28 SKU produk di 5 kategori, serta 5 kanal penjualan (POS, E-commerce, Marketplace, Mobile App, Social Commerce).",
+                "Kapabilitas Analisis: Metrik finansial (Revenue, GMV, Margin, AOV, Cancel Rate), rincian multi-dimensi, ranking performa tertinggi/terendah, dan deteksi anomali.",
+                "Tata Kelola Data: Menghitung metrik secara riil dari database PostgreSQL (`v_daily_revenue`, `v_orders`, `v_order_lines`) menggunakan SQL read-only yang tervalidasi ketat."
+            ]
+        )
+        recommendations = (
+            [
+                "Interactive Queries: You can ask specific questions like 'Top 5 products by revenue' or discuss metric formulas like 'What is the difference between GMV and Revenue?'."
+            ]
+            if is_en else
+            [
+                "Kueri Interaktif: Anda dapat menanyakan data spesifik seperti 'Top 5 produk revenue tertinggi' atau mendiskusikan arti metrik seperti 'Apa bedanya GMV dan Revenue?'."
+            ]
+        )
+        follow_up_options = (
+            [
+                {"label": "MTD GMV for Java Region", "value": "MTD GMV for Java region?"},
+                {"label": "Top 5 Products by Revenue Last Month", "value": "Top 5 products by revenue last month?"},
+                {"label": "MTD Revenue & Margin for FMCG in Java", "value": "MTD Revenue and margin for FMCG in Java?"},
+                {"label": "Cancel Rate This Month", "value": "Cancel rate this month?"}
+            ]
+            if is_en else
+            [
+                {"label": "GMV MTD Region Jawa", "value": "GMV MTD untuk region Jawa?"},
+                {"label": "Top 5 Produk Revenue Tertinggi Bulan Lalu", "value": "Top 5 produk berdasarkan revenue bulan lalu?"},
+                {"label": "Revenue & Margin FMCG di Jawa (MTD)", "value": "Revenue dan margin MTD untuk FMCG di Jawa?"},
+                {"label": "Cancel Rate Bulan Ini", "value": "Cancel rate bulan ini?"}
+            ]
+        )
+
     # CASE 1: Discussion about Cancel Rate (e.g. "ini berarti apa artinya cancel rate?", "7.13% bagus atau jelek?")
-    if ("cancel" in msg_lower or "batal" in msg_lower) or (not asks_explicit_domain_term and "cancel_rate" in active_metrics):
+    elif ("cancel" in msg_lower or "batal" in msg_lower) or (not asks_explicit_domain_term and "cancel_rate" in active_metrics):
         cr_val = first_row.get("cancel_rate_pct")
         canc_cnt = first_row.get("cancelled_orders")
         tot_cnt = first_row.get("total_orders")

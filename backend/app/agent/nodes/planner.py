@@ -269,6 +269,17 @@ def _is_discussion_or_advisory_query(msg_lower: str) -> bool:
     if re.search(r'\b(?:anomali|anomaly|drop\s*>\s*30%|top\s+\d+|breakdown\s+per|rincian\s+per)\b', msg_lower):
         return False
 
+    # 0. Bot Identity, Capabilities & Enterprise BI Persona ("kamu siapa?", "who are you?", "kamu bisa apa?", "what can you do?")
+    if re.search(
+        r'\b(?:kamu\s+(?:siapa|apa|bot\s+apa|sistem\s+apa)|siapa\s+(?:kamu|anda)|anda\s+siapa|'
+        r'who\s+are\s+you|what\s+are\s+you|what\s+is\s+this\s+(?:agent|bot|system)|'
+        r'kamu\s+bisa\s+(?:apa|bantu\s+apa)|bisa\s+bantu\s+apa|apa\s+yang\s+bisa\s+kamu\s+lakukan|'
+        r'bisa\s+apa\s+saja|fitur\s+apa\s+saja|tugas\s+kamu|fungsi\s+kamu|'
+        r'what\s+can\s+you\s+do|how\s+can\s+you\s+help|what\s+do\s+you\s+do)\b',
+        msg_lower
+    ):
+        return True
+
     # 1. Explicit Meaning / Definition / Formula / Conceptual Difference
     if re.search(
         r'\b(?:apa\s+artinya|artinya\s+apa|apa\s+maksud(?:nya)?|maksudnya\s+(?:apa|gimana|bagaimana)|'
@@ -599,26 +610,42 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
                 plan.intent = prev_plan.intent
                 plan.limit = prev_plan.limit
 
-    # 5. Out-of-Scope Domain Guardrail
+    # 5. Out-of-Scope Domain Guardrail & Conversational Triage
+    words = msg_lower.split()
+    is_pure_greeting = (
+        len(words) <= 3 and any(w in ["halo", "hi", "hey", "pagi", "siang", "sore", "malam", "assalamualaikum", "menu", "bantu", "help", "hello"] for w in words)
+    )
+    is_vague_request = (
+        msg_lower in ["analisis dong", "tolong analisis", "rekomendasi analisis", "apa yang bisa kamu lakukan", "mau tanya data", "cek data", "cek", "analisis", "analyze", "help me analyze"]
+    )
+
     OUT_OF_SCOPE_TERMS = [
         "presiden", "menteri", "pemilu", "partai", "dpr", "gubernur", "walikota", "bupati", "raja",
         "ibukota", "ibu kota", "cuaca", "ramalan", "resep", "masak", "lagu", "musik",
         "film", "aktor", "artis", "sepak bola", "pemain", "olahraga", "zodiak", "horoskop",
         "siapa penemu", "siapa pencipta", "cerpen", "pantun", "puisi", "coding", "bikin script",
         "president", "minister", "weather", "recipe", "movie", "song", "football", "who is the",
-        "joke", "lelucon", "tebak-tebakan"
+        "joke", "lelucon", "tebak-tebakan", "jam berapa", "pukul berapa", "what time", "what day",
+        "hari apa", "tanggal berapa", "hari ini apa", "siapa pacar", "curhat", "cerita dong"
     ]
     has_business_intent = bool(extracted_metrics) or bool(plan.filters) or any(k in msg_lower for k in [
         "gmv", "revenue", "margin", "cogs", "penjualan", "sales", "order", "pesanan", "cancel",
         "batal", "produk", "product", "toko", "store", "cabang", "kota", "city", "region",
         "wilayah", "pelanggan", "customer", "channel", "segmen", "segment", "brand", "merk",
         "terlaris", "tertinggi", "terendah", "sepi", "lambat", "ranking", "top", "tier",
-        "anomali", "anomaly", "drop", "turun", "kategori", "category", "unit", "qty", "harga"
+        "anomali", "anomaly", "drop", "turun", "kategori", "category", "unit", "qty", "harga",
+        "omset", "omzet", "transaksi", "fmcg", "performa", "kinerja", "daerah", "aov", "laba",
+        "keuntungan", "profit", "stok", "stock", "sku", "item"
     ])
 
     if any(term in msg_lower for term in OUT_OF_SCOPE_TERMS) and not has_business_intent:
         plan.intent = "out_of_scope"
         return _finalize_commander_plan(msg, plan, lang, "Out of Scope (Domain Scope Guardrail)")
+
+    # Pure non-business inquiry deflection (neither business intent nor a contextual follow-up)
+    if not has_business_intent and not plan.is_follow_up and not is_pure_greeting and not is_vague_request and plan.intent != "discussion":
+        plan.intent = "out_of_scope"
+        return _finalize_commander_plan(msg, plan, lang, "Out of Scope (No Retail Business Context)")
 
     # 5b. Unresolved Geographic Entity Check (e.g. "GMV di Papua", "Revenue di Maluku")
     unresolved_loc = detect_unresolved_location_mention(msg, plan.filters)
@@ -650,14 +677,6 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
         return _finalize_commander_plan(msg, plan, lang, f"Needs Clarification (Unresolved Location: {unresolved_loc})")
 
     # 6. Ambiguity Gatekeeper: Proactive Clarification Loop (ClarificationGuardSpecialist)
-    words = msg_lower.split()
-    is_pure_greeting = (
-        len(words) <= 3 and any(w in ["halo", "hi", "hey", "pagi", "siang", "sore", "malam", "assalamualaikum", "menu", "bantu", "help", "hello"] for w in words)
-    )
-    is_vague_request = (
-        msg_lower in ["analisis dong", "tolong analisis", "rekomendasi analisis", "apa yang bisa kamu lakukan", "mau tanya data", "cek data", "cek", "analisis", "analyze", "help me analyze"]
-    )
-
     # 6a. Orphan Follow-Up / Deictic Reference in a Fresh Session (no prior turn in session)
     is_orphan_followup = (
         not prev_plan_dict
@@ -746,7 +765,12 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
             ]
         return _finalize_commander_plan(msg, plan, lang, "Needs Clarification (Ambiguous KPI Metric Disambiguation)")
 
-    if is_pure_greeting or is_vague_request:
+    if is_pure_greeting:
+        plan.intent = "discussion"
+        plan.needs_clarification = False
+        return _finalize_commander_plan(msg, plan, lang, "Greeting & Welcome")
+
+    if is_vague_request:
         plan.needs_clarification = True
         plan.intent = "clarification_reply"
 

@@ -98,3 +98,11 @@ override.tf.json
 .terraformrc
 terraform.rc
 tfplan
+
+# 10. Temporary Docs & Working Copies
+tmp/
+docs/tmp
+docs/tmp/
+docs/solution_architecture.svg
+docs/TECHNICAL_DEEP_DIVE.md
+docs/dump.md
