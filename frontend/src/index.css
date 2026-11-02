@@ -684,6 +684,10 @@ video {
   margin-top: 0.875rem;
 }
 
+.block {
+  display: block;
+}
+
 .flex {
   display: flex;
 }
@@ -818,6 +822,10 @@ video {
 
 .flex-1 {
   flex: 1 1 0%;
+}
+
+.flex-shrink {
+  flex-shrink: 1;
 }
 
 .flex-shrink-0 {
@@ -1420,10 +1428,6 @@ video {
 
 .text-\[22px\] {
   font-size: 22px;
-}
-
-.font-black {
-  font-weight: 900;
 }
 
 .font-bold {

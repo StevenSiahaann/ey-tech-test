@@ -30,6 +30,7 @@ import {
   ThumbsDown
 } from 'lucide-react';
 import { exportToCsv, openExecutiveHtmlReport } from './utils/executiveReport';
+import { EyLogo } from './components/EyLogo';
 
 // --- TYPES ---
 interface StepEvent {
@@ -1146,9 +1147,7 @@ export function App() {
         <div className="p-4 md:p-5 border-b border-[#3e3e4a] flex justify-between items-start">
           <div>
             <h1 className="text-[17px] md:text-[18px] font-bold tracking-tight flex items-center gap-2.5 text-white">
-              <span className="w-6 h-6 rounded bg-[#ffe600] text-[#2e2e38] font-black text-[12px] flex items-center justify-center">
-                EY
-              </span>
+              <EyLogo className="w-6 h-6 shrink-0 shadow-xs" />
               <span>{t.appTitle}</span>
             </h1>
             <p className="text-[#a0a0ab] text-[12px] mt-1">{t.appSubtitle}</p>
@@ -1310,9 +1309,7 @@ export function App() {
               <div className="w-full max-w-4xl mx-auto my-auto py-6">
                 <div className="bg-white border border-[#e5e7eb] rounded-2xl p-6 md:p-8 shadow-xs mb-6">
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="w-8 h-8 rounded-md bg-[#ffe600] text-[#2e2e38] flex items-center justify-center font-black text-[13px]">
-                      EY
-                    </div>
+                    <EyLogo className="w-8 h-8 shrink-0 shadow-xs" />
                     <h3 className="text-[19px] md:text-[22px] font-bold text-[#2e2e38]">
                       {t.welcomeTitle}
                     </h3>

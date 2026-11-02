@@ -213,15 +213,9 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
     .brand-logo {
       width: 32px;
       height: 32px;
-      background: #ffe600;
-      border-radius: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 900;
-      font-size: 14px;
-      color: #2e2e38;
-      letter-spacing: -0.05em;
+      flex-shrink: 0;
+      border-radius: 4px;
+      display: block;
     }
     .badge {
       display: inline-block;
@@ -406,7 +400,11 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
     <div class="header-row">
       <div>
         <div class="brand-group">
-          <div class="brand-logo">EY</div>
+          <svg class="brand-logo" width="32" height="32" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="EY Logo">
+            <rect width="44" height="44" rx="4" fill="#1F1F24"/>
+            <path d="M26 0H40C42.2091 0 44 1.79086 44 4V18L26 0Z" fill="#FFE600"/>
+            <text x="9" y="32" font-size="22" font-weight="800" fill="#FFFFFF" letter-spacing="-1" font-family="'Plus Jakarta Sans', system-ui, sans-serif">EY</text>
+          </svg>
           <span class="badge">${isEn ? 'Executive Dossier' : 'Dossier Eksekutif'}</span>
         </div>
         <h1>${escapeHtml(meta.userQuery)}</h1>
