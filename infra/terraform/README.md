@@ -63,3 +63,4 @@ psql "postgresql://bi_admin:<PASSWORD>@${PG_FQDN}:5432/ey_bi?sslmode=require" \
   -f ../../db/02_views.sql \
   -f ../../db/03_roles.sql
 ```
+

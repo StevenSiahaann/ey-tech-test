@@ -18,3 +18,4 @@ min_replicas            = 1
 max_replicas            = 5
 log_retention_days      = 30
 as_of_date              = "2026-10-29"
+

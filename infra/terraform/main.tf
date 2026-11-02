@@ -355,3 +355,4 @@ resource "azurerm_container_app" "bi_agent" {
     }
   }
 }
+
