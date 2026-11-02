@@ -885,12 +885,12 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
 
         recommendations = (
             [
-                "Channel & City Isolation: Break down the Cancel Rate by sales channel (POS, Marketplace, Web) or by city to pinpoint where cancellations concentrate.",
-                "Inventory Sync & Payment SLA Audit: High marketplace/web cancellations typically stem from delayed stock synchronization or expired payment windows."
+                "Channel & City Isolation: Break down the Cancel Rate by sales channel (POS, E-commerce, Marketplace, Mobile App, Social Commerce) or by city to pinpoint where cancellations concentrate.",
+                "Inventory Sync & Payment SLA Audit: High digital-channel cancellations typically stem from delayed stock synchronization or expired payment windows."
             ]
             if is_en else
             [
-                "Isolasi per Channel & Kota: Lakukan breakdown Cancel Rate berdasarkan channel penjualan (POS, Marketplace, Web) atau per kota untuk menemukan sumber pembatalan tertinggi.",
+                "Isolasi per Channel & Kota: Lakukan breakdown Cancel Rate berdasarkan channel penjualan (POS, E-commerce, Marketplace, Mobile App, Social Commerce) atau per kota untuk menemukan sumber pembatalan tertinggi.",
                 "Audit Sinkronisasi Stok & Pembayaran: Pembatalan pesanan pada kanal digital umumnya dipicu oleh selisih stok gudang (stock-out pasca checkout) atau batas waktu pembayaran yang kedaluwarsa."
             ]
         )
@@ -1026,12 +1026,12 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
 
         recommendations = (
             [
-                "Granular Drill-Down: Break down the current figure by city (`store_city`) or sales channel (`POS`, `Marketplace`, `Web`) to isolate top-performing branches.",
+                "Granular Drill-Down: Break down the current figure by city (`store_city`) or sales channel (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`) to isolate top-performing branches.",
                 "Margin & Assortment Optimization: Focus promotional bundles on high-margin categories and protect stock availability on top-selling SKUs."
             ]
             if is_en else
             [
-                "Pembedahan Granular (Drill-Down): Lakukan breakdown dari hasil di atas berdasarkan kota (`per city`) atau channel penjualan (`POS`, `Marketplace`, `Web`) untuk mengidentifikasi cabang terbaik.",
+                "Pembedahan Granular (Drill-Down): Lakukan breakdown dari hasil di atas berdasarkan kota (`per city`) atau channel penjualan (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`) untuk mengidentifikasi cabang terbaik.",
                 "Optimasi Margin & Ketersediaan Produk: Fokuskan promosi bundling pada kategori bermargin tinggi dan jaga ketersediaan stok (safety stock) pada produk terlaris."
             ]
         )
@@ -1059,13 +1059,13 @@ def synthesize_discussion_response(state: AgentState) -> Dict[str, Any]:
         insights = (
             [
                 "Core Financial Metrics Available: GMV (all order statuses), Net Revenue (`status = 'Completed'`), COGS (`qty × unit_cost`), Gross Margin (`Revenue − COGS`), and Cancel Rate (`Cancelled / Total Orders`).",
-                "Catalog Coverage: 28 distinct products across 5 categories (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`), sold across `POS`, `Marketplace`, and `Web` channels.",
+                "Catalog & Omnichannel Coverage: 28 distinct products across 5 categories (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`), sold across 5 channels (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`).",
                 "Interactive Multi-Turn Context: After running any data query, you can ask 'What does this number mean?', 'Is this good or bad?', or 'What strategy should we take?'."
             ]
             if is_en else
             [
                 "Metrik Finansial Utama: GMV (seluruh status pesanan), Net Revenue (khusus `status = 'Completed'`), COGS (`qty × unit_cost`), Gross Margin (`Revenue − COGS`), serta Cancel Rate (`Cancelled / Total Pesanan`).",
-                "Cakupan Katalog & Kanal: Mencakup 28 produk pada 5 kategori (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`) di kanal `POS`, `Marketplace`, dan `Web`.",
+                "Cakupan Katalog & 5 Kanal: Mencakup 28 produk pada 5 kategori (`FMCG`, `Electronics`, `Fashion`, `Home & Living`, `Health & Beauty`) di 5 kanal (`POS`, `E-commerce`, `Marketplace`, `Mobile App`, `Social Commerce`).",
                 "Diskusi Multi-Turn Interaktif: Setelah menjalankan kueri data apa pun, Anda dapat berdiskusi seperti 'Apa artinya angka ini?', 'Apakah angka ini bagus atau bahaya?', atau 'Strategi apa yang harus dilakukan?'."
             ]
         )

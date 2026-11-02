@@ -25,7 +25,9 @@ import {
   Target,
   ArrowRight,
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  ThumbsUp,
+  ThumbsDown
 } from 'lucide-react';
 import { exportToCsv, openExecutiveHtmlReport } from './utils/executiveReport';
 
@@ -291,6 +293,7 @@ const formatValue = (val: any, colName: string = '', lang: 'id' | 'en' = 'id'): 
 // --- AGENT MESSAGE CARD COMPONENT ---
 interface AgentMessageCardProps {
   turn: ChatTurn;
+  sessionId: string;
   lang: 'id' | 'en';
   t: typeof TRANSLATIONS['id'];
   onExportCsv: () => void;
@@ -298,10 +301,25 @@ interface AgentMessageCardProps {
   onSelectOption?: (queryText: string) => void;
 }
 
-const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, lang, t, onExportCsv, onExportHtml, onSelectOption }) => {
+const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, sessionId, lang, t, onExportCsv, onExportHtml, onSelectOption }) => {
   const [activeTab, setActiveTab] = useState<'table' | 'sql'>('table');
   const [isThinkingExpanded, setIsThinkingExpanded] = useState<boolean>(false);
   const [isTableExpanded, setIsTableExpanded] = useState<boolean>(false);
+  const [feedbackScore, setFeedbackScore] = useState<number | null>(null);
+
+  const handleFeedback = async (score: number) => {
+    setFeedbackScore(score);
+    try {
+      await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          score
+        })
+      });
+    } catch (e) {}
+  };
 
   const res = turn.agentResponse;
   if (!res) return null;
@@ -695,7 +713,35 @@ const AgentMessageCard: React.FC<AgentMessageCardProps> = ({ turn, lang, t, onEx
               <strong>{t.assumptionsPrefix}</strong> {res.assumptions && res.assumptions.length > 0 ? res.assumptions.join(' | ') : t.assumptionsDefault}
             </span>
           </div>
-          <div className="flex flex-col sm:flex-row gap-2.5 w-full xl:w-auto shrink-0">
+          <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full xl:w-auto shrink-0">
+            {res.sql && (
+              <div className="flex items-center gap-1.5 mr-1">
+                <button
+                  type="button"
+                  onClick={() => handleFeedback(1)}
+                  className={`p-2 rounded-md border transition-colors cursor-pointer ${
+                    feedbackScore === 1
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                      : 'bg-white border-gray-300 text-gray-500 hover:text-[#2e2e38] hover:bg-gray-50'
+                  }`}
+                  title={lang === 'en' ? 'Helpful (Promote verified SQL to Vector Store)' : 'Akurat (Simpan pola SQL ke Vector Store)'}
+                >
+                  <ThumbsUp size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleFeedback(-1)}
+                  className={`p-2 rounded-md border transition-colors cursor-pointer ${
+                    feedbackScore === -1
+                      ? 'bg-red-50 border-red-300 text-red-700'
+                      : 'bg-white border-gray-300 text-gray-500 hover:text-[#2e2e38] hover:bg-gray-50'
+                  }`}
+                  title={lang === 'en' ? 'Report issue' : 'Kurang tepat'}
+                >
+                  <ThumbsDown size={14} />
+                </button>
+              </div>
+            )}
             {tableRows.length > 0 && (
               <button
                 onClick={onExportCsv}
@@ -865,6 +911,7 @@ export function App() {
 
   const handleDeleteSession = (e: React.MouseEvent, idToDelete: string) => {
     e.stopPropagation();
+    fetch(`/api/sessions/${idToDelete}`, { method: 'DELETE' }).catch(() => {});
     const updated = sessions.filter(s => s.id !== idToDelete);
     setSessions(updated);
     try {
@@ -1320,6 +1367,7 @@ export function App() {
                     {turn.agentResponse && (
                       <AgentMessageCard
                         turn={turn}
+                        sessionId={sessionId}
                         lang={lang}
                         t={t}
                         onSelectOption={(q) => handleSendMessage(q)}

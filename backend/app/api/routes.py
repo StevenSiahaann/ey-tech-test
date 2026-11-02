@@ -185,6 +185,20 @@ def submit_feedback(req: FeedbackRequest):
                 sql=last_turn["sql"],
                 intent=last_turn.get("intent", "metric_query")
             )
+    if req.trace_id:
+        try:
+            from backend.app.core.llm_factory import get_langfuse_client
+            lf = get_langfuse_client()
+            if lf:
+                lf.score(
+                    trace_id=req.trace_id,
+                    name="user_feedback",
+                    value=float(req.score),
+                    comment=req.comment or ("Positive user feedback" if req.score > 0 else "Negative user feedback"),
+                )
+                lf.flush()
+        except Exception:
+            pass
     return {"status": "recorded", "score": req.score, "promoted_to_vector_store": promoted}
 
 
