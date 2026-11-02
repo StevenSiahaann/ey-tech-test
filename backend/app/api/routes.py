@@ -238,12 +238,20 @@ def submit_feedback(req: FeedbackRequest):
             from backend.app.core.llm_factory import get_langfuse_client
             lf = get_langfuse_client()
             if lf:
-                lf.score(
-                    trace_id=req.trace_id,
-                    name="user_feedback",
-                    value=float(req.score),
-                    comment=req.comment or ("Positive user feedback" if req.score > 0 else "Negative user feedback"),
-                )
+                if hasattr(lf, "score"):
+                    lf.score(
+                        trace_id=req.trace_id,
+                        name="user_feedback",
+                        value=float(req.score),
+                        comment=req.comment or ("Positive user feedback" if req.score > 0 else "Negative user feedback"),
+                    )
+                elif hasattr(lf, "create_score"):
+                    lf.create_score(
+                        trace_id=req.trace_id,
+                        name="user_feedback",
+                        value=float(req.score),
+                        comment=req.comment or ("Positive user feedback" if req.score > 0 else "Negative user feedback"),
+                    )
                 lf.flush()
         except Exception:
             pass

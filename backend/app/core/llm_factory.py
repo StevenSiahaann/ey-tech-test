@@ -22,6 +22,9 @@ def get_langfuse_client() -> Optional[Any]:
         return None
     if _langfuse_client is None:
         try:
+            os.environ["LANGFUSE_PUBLIC_KEY"] = settings.LANGFUSE_PUBLIC_KEY
+            os.environ["LANGFUSE_SECRET_KEY"] = settings.LANGFUSE_SECRET_KEY
+            os.environ["LANGFUSE_HOST"] = settings.LANGFUSE_HOST
             _langfuse_client = langfuse.Langfuse(
                 public_key=settings.LANGFUSE_PUBLIC_KEY,
                 secret_key=settings.LANGFUSE_SECRET_KEY,
@@ -158,7 +161,18 @@ class AgentLangfuseCallback(BaseCallbackHandler):
 def get_langfuse_callback(session_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[Any]:
     """
     Returns a configured Langfuse CallbackHandler for LLM observability if enabled.
+    Prefers the modern OpenTelemetry-backed CallbackHandler from Langfuse v5+.
     """
+    if not settings.LANGFUSE_ENABLED or not settings.LANGFUSE_PUBLIC_KEY or not settings.LANGFUSE_SECRET_KEY:
+        return None
+    try:
+        os.environ["LANGFUSE_PUBLIC_KEY"] = settings.LANGFUSE_PUBLIC_KEY
+        os.environ["LANGFUSE_SECRET_KEY"] = settings.LANGFUSE_SECRET_KEY
+        os.environ["LANGFUSE_HOST"] = settings.LANGFUSE_HOST
+        from langfuse.langchain import CallbackHandler
+        return CallbackHandler(public_key=settings.LANGFUSE_PUBLIC_KEY)
+    except Exception:
+        pass
     client = get_langfuse_client()
     if client:
         return AgentLangfuseCallback(client, session_id=session_id, user_id=user_id)
