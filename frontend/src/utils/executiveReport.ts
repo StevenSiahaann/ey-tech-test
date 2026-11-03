@@ -69,9 +69,17 @@ export function exportToCsv(
 }
 
 export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMetadata): string {
-  const { summary, kpis = [], table, chart, insights = [], recommendations = [], sql, assumptions = [] } = agentResponse;
-  const rows: Record<string, any>[] = table?.rows || [];
-  const columns: { name: string }[] = table?.columns || [];
+  const safeRes = agentResponse || {};
+  const summary = safeRes.summary || '';
+  const kpis: any[] = Array.isArray(safeRes.kpis) ? safeRes.kpis : [];
+  const table = safeRes.table || null;
+  const chart = safeRes.chart || null;
+  const insights: string[] = Array.isArray(safeRes.insights) ? safeRes.insights : [];
+  const recommendations: string[] = Array.isArray(safeRes.recommendations) ? safeRes.recommendations : [];
+  const sql = safeRes.sql || '';
+  const assumptions: string[] = Array.isArray(safeRes.assumptions) ? safeRes.assumptions : [];
+  const rows: Record<string, any>[] = Array.isArray(table?.rows) ? table.rows : [];
+  const columns: { name: string }[] = Array.isArray(table?.columns) ? table.columns : [];
   const isEn = meta.lang === 'en';
 
   // Helper currency/number formatting
@@ -239,6 +247,31 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
       color: #6b7280;
       font-family: ui-monospace, SFMono-Regular, monospace;
     }
+    .action-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .btn-secondary {
+      background: #ffffff;
+      color: #2e2e38;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 9px 14px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .btn-secondary:hover {
+      background: #f3f4f6;
+      border-color: #2e2e38;
+    }
     .print-btn {
       background: #2e2e38;
       color: #ffffff;
@@ -391,7 +424,7 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
     @media print {
       body { background: white; padding: 0; }
       .report-card { box-shadow: none; padding: 0; max-width: 100%; border: none; }
-      .print-btn { display: none; }
+      .print-btn, .btn-secondary, .action-group { display: none !important; }
     }
   </style>
 </head>
@@ -412,10 +445,16 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
           ${isEn ? 'Generated:' : 'Dibuat:'} ${escapeHtml(meta.timestamp)} • Engine: ${escapeHtml(meta.provider.toUpperCase())} (${escapeHtml(meta.modelName)}) • Status: AST Validated
         </div>
       </div>
-      <button class="print-btn" onclick="window.print()">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
-        <span>${isEn ? 'Print / Save as PDF' : 'Cetak / Simpan PDF'}</span>
-      </button>
+      <div class="action-group">
+        <button class="btn-secondary" onclick="downloadReportHtml()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          <span>${isEn ? 'Download HTML' : 'Download HTML'}</span>
+        </button>
+        <button class="print-btn" onclick="window.print()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+          <span>${isEn ? 'Print / Save as PDF' : 'Cetak / Simpan PDF'}</span>
+        </button>
+      </div>
     </div>
 
     <!-- Executive Summary -->
@@ -503,16 +542,74 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
       </div>
     ` : ''}
   </div>
+
+  <script>
+    function downloadReportHtml() {
+      try {
+        var html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+        var blob = new Blob([html], { type: 'text/html;charset=utf-8;' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = '${isEn ? 'EY_Executive_Report' : 'EY_Laporan_Eksekutif'}_${new Date().toISOString().slice(0, 10)}.html';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+      } catch (e) {
+        console.error('Failed to download HTML:', e);
+      }
+    }
+  </script>
 </body>
 </html>`;
 }
 
+export function downloadExecutiveHtmlReport(
+  agentResponse: any,
+  meta: ReportMetadata,
+  filename?: string
+): void {
+  try {
+    const htmlContent = generateExecutiveHtmlReport(agentResponse, meta);
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const defaultPrefix = meta.lang === 'en' ? 'EY_Executive_Report' : 'EY_Laporan_Eksekutif';
+    const cleanDate = new Date().toISOString().slice(0, 10);
+    const cleanQuery = (meta.userQuery || 'report')
+      .slice(0, 25)
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '_')
+      .replace(/_+/g, '_');
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename ? `${filename}.html` : `${defaultPrefix}_${cleanQuery}_${cleanDate}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    console.error('Failed to download executive HTML report:', err);
+  }
+}
+
 export function openExecutiveHtmlReport(agentResponse: any, meta: ReportMetadata): void {
-  const htmlContent = generateExecutiveHtmlReport(agentResponse, meta);
-  const win = window.open('', '_blank');
-  if (win) {
-    win.document.open();
-    win.document.write(htmlContent);
-    win.document.close();
+  try {
+    const htmlContent = generateExecutiveHtmlReport(agentResponse, meta);
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8;' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    // Open blob URL directly in new tab — eliminates about:blank race condition and empty document
+    const win = window.open(blobUrl, '_blank');
+    if (!win || win.closed || typeof win.closed === 'undefined') {
+      // Fallback: If browser popup blocker intercepts, trigger direct download
+      downloadExecutiveHtmlReport(agentResponse, meta);
+    }
+  } catch (err) {
+    console.error('Failed to open executive HTML report:', err);
+    // In case of any error, try download directly
+    downloadExecutiveHtmlReport(agentResponse, meta);
   }
 }
