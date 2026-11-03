@@ -5,7 +5,7 @@ help:
 	@echo "  make up          - Start all Docker containers (PostgreSQL, Redis, Backend, Frontend)"
 	@echo "  make down        - Stop and remove all containers and volumes"
 	@echo "  make seed        - Generate synthetic SQL data (5 balanced channels, anomalies)"
-	@echo "  make test        - Run all 28 unit, multi-turn, logging, and guardrail tests"
+	@echo "  make test        - Run all 41 unit, multi-turn, logging, and guardrail tests"
 	@echo "  make eval        - Run automated evaluation harness on all 10 test scenarios"
 	@echo "  make tf-init     - Initialize Azure Terraform providers in infra/terraform"
 	@echo "  make tf-validate - Format check and validate Azure Terraform configuration"
