@@ -35,43 +35,38 @@ Built for the **AI Engineer Technical Assessment**.
 
 ## Multi-Agent System Architecture
 
-```
-User Query (Bahasa Indonesia / English)
-        │
-        ▼
-[1. Input Guardrails] ──(Unsafe / DDL / Injection)──► Polite Refusal & Safe Suggestions
-        │ (Safe)
-        ▼
-[2. Context & Session Memory] ◄──► [Redis / Session Store] (Turn History & Entity Digest)
-        │
-        ▼
-[3. Commander & Contextual Query Rewriter]
-        ├──► Standalone Query Synthesis & Morphological Normalization
-        │
-        ├──► [ClarificationGuardSpecialist] ──(Ambiguous / Out-of-Scope)──► Proactive Confirmation Chips
-        │
-        ├──► [ConversationalAdvisorSpecialist] ──(Conceptual / Strategy Discussion)──► Grounded Advisory Card
-        │
-        ▼ (Data Retrieval Intent)
-[4. Hybrid Vector Retrieval] ◄──► [Vector Store] (Dynamic Date-Rendered Golden SQL)
-        │
-        ▼
-[5. Specialist SQL Compilation]
-        ├──► [CatalogMetadataSpecialist] (Catalog Counts & Distinct Listings)
-        ├──► [AnalyticalSQLSpecialist]   (Rankings, Breakdowns, Comparisons, Negations)
-        └──► [AnomalyDiagnosticSpecialist] (7-Day Rolling Window Drop >30%)
-        │
-        ▼
-[6. AST & Security Validation (sqlglot)] ──(Error)──► [Self-Correction Retry Loop (Max 2)]
-        │ (Approved)
-        ▼
-[7. Relational DB Execution] ──► PostgreSQL 16 (bi_readonly) / Automatic DuckDB Engine
-        │
-        ▼
-[8. Data-Grounded Synthesis] ──► KPI Cards, Distribution Charts, Insights, Recommendations
-        │
-        ▼
-[9. SSE Streaming & Feedback Loop] ──► Vite React UI + 👍/👎 Vector Store Promotion
+```mermaid
+flowchart TD
+    User["User Query<br/><i>(Bahasa Indonesia / English)</i>"] --> G1["1. Input Guardrails"]
+
+    G1 -- "Unsafe / DDL / Injection" --> Refusal["Polite Refusal & Safe Suggestions"]
+    G1 -- "Safe" --> Mem["2. Context & Session Memory"]
+
+    Mem <--> Redis[("Redis / Session Store<br/><i>(Turn History & Entity Digest)</i>")]
+    Mem --> Cmd["3. Commander & Contextual Query Rewriter"]
+
+    Cmd --> Rewrite["Standalone Query Synthesis &<br/>Morphological Normalization"]
+    Cmd -- "Ambiguous / Out-of-Scope" --> Clarify["ClarificationGuardSpecialist<br/><i>(Proactive Confirmation Chips)</i>"]
+    Cmd -- "Conceptual / Strategy Discussion" --> Advisor["ConversationalAdvisorSpecialist<br/><i>(Grounded Advisory Card)</i>"]
+
+    Cmd -- "Data Retrieval Intent" --> Vec["4. Hybrid Vector Retrieval"]
+    Vec <--> VStore[("Vector Store<br/><i>(Dynamic Date-Rendered Golden SQL)</i>")]
+
+    Vec --> Comp["5. Specialist SQL Compilation"]
+    Comp --> CatSpec["CatalogMetadataSpecialist<br/><i>(Catalog Counts & Distinct Listings)</i>"]
+    Comp --> AnaSpec["AnalyticalSQLSpecialist<br/><i>(Rankings, Breakdowns, Comparisons, Negations)</i>"]
+    Comp --> AnomSpec["AnomalyDiagnosticSpecialist<br/><i>(7-Day Rolling Window Drop &gt;30%)</i>"]
+
+    CatSpec --> Val["6. AST & Security Validation (sqlglot)"]
+    AnaSpec --> Val
+    AnomSpec --> Val
+
+    Val -- "Error" --> Retry["Self-Correction Retry Loop<br/><i>(Max 2 retries)</i>"]
+    Retry --> Comp
+    Val -- "Approved" --> Exec["7. Relational DB Execution<br/><i>(PostgreSQL 16 bi_readonly / DuckDB)</i>"]
+
+    Exec --> Synth["8. Data-Grounded Synthesis<br/><i>(KPI Cards, Distribution Charts, Insights, Recommendations)</i>"]
+    Synth --> Stream["9. SSE Streaming & Feedback Loop<br/><i>(Vite React UI + 👍/👎 Vector Store Promotion)</i>"]
 ```
 
 For detailed architectural specifications, see [docs/architecture.md](docs/architecture.md).

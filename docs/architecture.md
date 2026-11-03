@@ -569,34 +569,13 @@ For local testing and offline evaluation:
 
 ### 9.1 The 5-Layer Defense-in-Depth Guardrail System
 
-```
-User Query
-    │
-    ▼
-[Layer 1: Input Guardrail]
-    ├── Threat detection: Block SQL injection patterns, system prompt extraction, DDL keywords
-    └── Safe response generation with suggested valid business queries
-    │
-    ▼
-[Layer 2: AST Inspection (sqlglot)]
-    ├── Parse SQL string into an Abstract Syntax Tree (dialect: Postgres/DuckDB)
-    ├── Root validation: Disallow multiple statements; strictly enforce SELECT or WITH root
-    └── Block dangerous functions: pg_sleep, pg_read_file, dblink, version, etc.
-    │
-    ▼
-[Layer 3: Schema Allowlist Enforcement]
-    ├── Validate every Table, View, and Column expression against the Schema Registry
-    └── Restrict targets to: v_order_lines, v_orders, v_daily_revenue, and core dimensions
-    │
-    ▼
-[Layer 4: Semantic Alignment & LIMIT Cap]
-    ├── Cross-reference SQL SELECT clauses against Planned Metrics
-    └── Automatically wrap or inject defensive LIMIT 1000 on unbounded queries
-    │
-    ▼
-[Layer 5: Database Role Isolation]
-    ├── Connect strictly via bi_readonly database role
-    └── Session constraints: default_transaction_read_only = on, statement_timeout = '10s'
+```mermaid
+flowchart TD
+    UQ["User Query"] --> L1["Layer 1: Input Guardrail<br/>• Threat detection: Block SQLi, prompt injection, DDL keywords<br/>• Safe response generation with valid business suggestions"]
+    L1 --> L2["Layer 2: AST Inspection (sqlglot)<br/>• Parse SQL string into Abstract Syntax Tree (Postgres/DuckDB)<br/>• Root validation: Disallow multi-statement; enforce SELECT/WITH root<br/>• Block dangerous functions: pg_sleep, pg_read_file, dblink, version"]
+    L2 --> L3["Layer 3: Schema Allowlist Enforcement<br/>• Validate Table, View, and Column vs Schema Registry<br/>• Restrict targets to: v_order_lines, v_orders, v_daily_revenue, core dimensions"]
+    L3 --> L4["Layer 4: Semantic Alignment & LIMIT Cap<br/>• Cross-reference SQL SELECT clauses against Planned Metrics<br/>• Automatically wrap or inject defensive LIMIT 1000 on unbounded queries"]
+    L4 --> L5["Layer 5: Database Role Isolation<br/>• Connect strictly via bi_readonly database role<br/>• Session constraints: default_transaction_read_only = on, statement_timeout = '10s'"]
 ```
 
 ### 9.2 Structured Dual Log Rotation (`backend/app/core/logger.py`)
@@ -682,15 +661,15 @@ The architecture has been verified against the project's technical evaluation be
 ## 13. Domain Glossary & Metric Definitions
 
 - **GMV (Gross Merchandise Value):** Total order value before cancellations or returns:  
-  $$\text{GMV} = \sum (\text{qty} \times \text{unit\_price} - \text{discount})$$
+  $$\text{GMV} = \sum (\text{qty} \times \text{unit price} - \text{discount})$$
 - **Net Revenue:** Realized revenue strictly from completed orders (`status = 'Completed'`). Excludes cancelled and returned items:  
-  $$\text{Net Revenue} = \sum_{\text{status} = \text{'Completed'}} (\text{qty} \times \text{unit\_price} - \text{discount})$$
+  $$\text{Net Revenue} = \sum_{\text{status} = \text{Completed}} (\text{qty} \times \text{unit price} - \text{discount})$$
 - **COGS (Cost of Goods Sold):** Direct inventory cost for completed orders:  
-  $$\text{COGS} = \sum_{\text{status} = \text{'Completed'}} (\text{qty} \times \text{unit\_cost})$$
+  $$\text{COGS} = \sum_{\text{status} = \text{Completed}} (\text{qty} \times \text{unit cost})$$
 - **Gross Margin:** Net commercial gain after subtracting inventory costs:  
   $$\text{Gross Margin} = \text{Net Revenue} - \text{COGS}$$
 - **Cancel Rate:** Ratio of cancelled orders to total orders within the evaluation window:  
-  $$\text{Cancel Rate} = \frac{\text{Count}(\text{orders where status} = \text{'Cancelled'})}{\text{Count}(\text{all orders})}$$
+  $$\text{Cancel Rate} = \frac{\text{Count}(\text{orders with status} = \text{Cancelled})}{\text{Count}(\text{all orders})}$$
 - **AOV (Average Order Value):** Average GMV generated per unique order:  
   $$\text{AOV} = \frac{\text{Total GMV}}{\text{Total Orders}}$$
 - **Deictic / Anaphoric Reference:** Conversational pronouns and contextual pointers (e.g., *"this product"*, *"how about Java?"*, *"breakdown per channel"*) resolved by the Commander into explicit standalone entities.

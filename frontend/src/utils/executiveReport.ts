@@ -161,15 +161,15 @@ export function generateExecutiveHtmlReport(agentResponse: any, meta: ReportMeta
             <svg viewBox="0 0 700 200" style="width: 100%; height: auto; overflow: visible;">
               <polyline fill="none" stroke="#2e2e38" stroke-width="2.5" points="${points}" />
               ${chartRows.map((r, i) => {
-                const x = 40 + (i / Math.max(chartRows.length - 1, 1)) * 620;
-                const val = Number(r[yKey]) || 0;
-                const y = 180 - (val / maxVal) * 140;
-                const dateLabel = escapeHtml(String(r[xKey] || '').slice(5));
-                return `
+          const x = 40 + (i / Math.max(chartRows.length - 1, 1)) * 620;
+          const val = Number(r[yKey]) || 0;
+          const y = 180 - (val / maxVal) * 140;
+          const dateLabel = escapeHtml(String(r[xKey] || '').slice(5));
+          return `
                   <circle cx="${x}" cy="${y}" r="4" fill="#ffe600" stroke="#2e2e38" stroke-width="2" />
                   <text x="${x}" y="196" font-size="10" text-anchor="middle" fill="#6b7280">${dateLabel}</text>
                 `;
-              }).join('')}
+        }).join('')}
             </svg>
           </div>
         `;
