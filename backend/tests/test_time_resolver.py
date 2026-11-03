@@ -44,6 +44,19 @@ class TestTimeResolver(unittest.TestCase):
         self.assertEqual(w.end_date, date(2026, 10, 29))
         self.assertEqual(w.label, "Minggu Ini")
 
+    def test_standalone_years(self):
+        # Past year full calendar
+        w_2025 = resolve_time_window("Total revenue di tahun 2025", base_date=self.anchor)
+        self.assertEqual(w_2025.start_date, date(2025, 1, 1))
+        self.assertEqual(w_2025.end_date, date(2025, 12, 31))
+        self.assertTrue(w_2025.is_explicit)
+
+        # Current year up to anchor date
+        w_2026 = resolve_time_window("Omzet Fashion di Bandung tahun 2026", base_date=self.anchor)
+        self.assertEqual(w_2026.start_date, date(2026, 1, 1))
+        self.assertEqual(w_2026.end_date, date(2026, 10, 29))
+        self.assertTrue(w_2026.is_explicit)
+
 
 if __name__ == "__main__":
     unittest.main()

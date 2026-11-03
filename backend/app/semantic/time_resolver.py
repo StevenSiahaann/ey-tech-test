@@ -275,6 +275,22 @@ def resolve_time_window(text: str, base_date: Optional[date] = None) -> TimeWind
             is_explicit=True
         )
 
+    # 6b. Specific Calendar Year (e.g., "tahun 2025", "tahun 2026", "in 2024", "year 2025", "2025")
+    year_match = re.search(r'\b(?:tahun|in|year|pada\s+tahun|di\s+tahun)?\s*(20\d{2})\b', t)
+    if year_match:
+        spec_year = int(year_match.group(1))
+        if 2020 <= spec_year <= today.year + 1:
+            start = date(spec_year, 1, 1)
+            end = today if spec_year == today.year else date(spec_year, 12, 31)
+            y_label = f"Tahun {spec_year}" if spec_year != today.year else f"Tahun {spec_year} (YTD)"
+            return TimeWindow(
+                start_date=start,
+                end_date=end,
+                label=y_label,
+                assumption_text=f"Periode Tahun {spec_year}: {start.strftime('%d %b %Y')} s.d. {end.strftime('%d %b %Y')} ({tz})",
+                is_explicit=True
+            )
+
     # 7. Anomaly default window (90-day lookback: e.g., 2026-08-01 to 2026-10-29) when time is not explicitly specified
     if re.search(r'\b(?:anomali|anomaly|drop\s*>\s*30%|7-day\s+average)\b', t):
         start = today - timedelta(days=89)
