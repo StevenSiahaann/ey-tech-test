@@ -25,6 +25,7 @@ export const generateSafeSessionId = (): string => {
 export const formatValue = (val: any, colName: string = '', lang: 'id' | 'en' = 'id'): string => {
   if (val === null || val === undefined) return '-';
   if (typeof val === 'number') {
+    if (colName.includes('rate') || colName.includes('pct') || colName.includes('percentage')) return `${val}%`;
     const isCurrency =
       colName.includes('revenue') ||
       colName.includes('gmv') ||
@@ -33,7 +34,6 @@ export const formatValue = (val: any, colName: string = '', lang: 'id' | 'en' = 
       colName.includes('price') ||
       colName === 'aov';
     if (isCurrency) return formatCurrency(val, lang);
-    if (colName.includes('rate') || colName.includes('pct') || colName.includes('percentage')) return `${val}%`;
     return val.toLocaleString(lang === 'en' ? 'en-US' : 'id-ID');
   }
   return String(val);
