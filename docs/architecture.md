@@ -66,7 +66,7 @@ The agent operates within an **Omnichannel Retail & FMCG** domain characterized 
 - **Governed Semantic Views:** Pre-aggregated views (`v_order_lines`, `v_orders`, `v_daily_revenue`) ensuring deterministic KPI formulas.
 
 ```mermaid
-graph LR
+flowchart LR
     subgraph Users ["Business Stakeholders"]
         Exec["Executive / C-Suite"]
         Analyst["Commercial Analyst"]
@@ -84,12 +84,14 @@ graph LR
         Telemetry["Langfuse Observability"]
     end
 
-    Users -->|Natural Language Inquiries (ID/EN)| AgentCore
-    AgentCore -->|Grounded KPI Cards, Charts, Dossiers| Users
-    AgentCore <-->|Context & Few-Shot Retrieval| Cache
-    AgentCore <-->|Prompt Completion & Structured Parsing| LLM
-    AgentCore -->|AST-Validated SQL (Read-Only)| DWH
-    AgentCore -.->|Traces, Spans & User Feedback| Telemetry
+    Exec -->|"Inquiries (ID/EN)"| AgentCore
+    Analyst -->|"Inquiries (ID/EN)"| AgentCore
+    StoreMgr -->|"Inquiries (ID/EN)"| AgentCore
+    AgentCore -->|"Grounded KPI Cards, Charts, Dossiers"| Analyst
+    AgentCore <-->|"Context & Few-Shot Retrieval"| Cache
+    AgentCore <-->|"Prompt Completion & Structured Parsing"| LLM
+    AgentCore -->|"AST-Validated SQL (Read-Only)"| DWH
+    AgentCore -.->|"Traces, Spans & User Feedback"| Telemetry
 ```
 
 ---
