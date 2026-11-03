@@ -35,6 +35,7 @@ jobs:
           PYTHONPATH: .
           ENVIRONMENT: test
           LANGFUSE_ENABLED: "false"
+          AS_OF_DATE: "2026-10-29"
         run: |
           python -m unittest discover -s backend/tests -v
 
@@ -43,6 +44,7 @@ jobs:
           PYTHONPATH: .
           ENVIRONMENT: test
           LANGFUSE_ENABLED: "false"
+          AS_OF_DATE: "2026-10-29"
         run: |
           python backend/eval/eval_harness.py
 
@@ -72,3 +74,4 @@ jobs:
       - name: Build Frontend Application (TypeScript + Vite)
         working-directory: frontend
         run: npm run build
+

@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     APP_NAME: str = "Conversational BI / Data Agent"
     APP_ENV: str = "development"
     APP_TIMEZONE: str = "Asia/Jakarta"
-    AS_OF_DATE: Optional[str] = Field(default=None, description="Anchor date for seed data evaluation (YYYY-MM-DD). If None, defaults to current date.")
+    AS_OF_DATE: Optional[str] = Field(
+        default="2026-10-29",
+        description="Anchor date for seed data evaluation (YYYY-MM-DD). Defaults to 2026-10-29 benchmark date."
+    )
 
     # LLM Settings (Supports Gemini and Azure OpenAI seamlessly)
     LLM_PROVIDER: str = Field(default="gemini", description="Options: 'gemini' or 'azure_openai'")

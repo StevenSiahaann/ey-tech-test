@@ -340,9 +340,9 @@ def synthesize_response(state: AgentState) -> Dict[str, Any]:
     # -------------------------------------------------------------------------
     elif "cancel_rate" in plan.metrics or "cancel_rate_pct" in col_names:
         row0 = rows[0]
-        rate = float(row0.get("cancel_rate_pct", 0.0))
-        cancelled = int(row0.get("cancelled_orders", 0))
-        total = int(row0.get("total_orders", 0))
+        rate = float(row0.get("cancel_rate_pct") or 0.0)
+        cancelled = int(row0.get("cancelled_orders") or 0)
+        total = int(row0.get("total_orders") or 0)
         completed_est = total - cancelled
         filter_desc = _describe_active_filters(plan, lang)
         scope_str = f" ({filter_desc})" if filter_desc else ""
