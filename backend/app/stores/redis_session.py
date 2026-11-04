@@ -13,7 +13,7 @@ _in_memory_store: Dict[str, Dict[str, Any]] = {}
 
 
 def _get_redis_client():
-    if not settings.REDIS_URL:
+    if not settings.REDIS_URL or settings.REDIS_URL.lower() in ("none", "not-configured", ""):
         return None
     try:
         import redis
