@@ -84,7 +84,7 @@ resource "azurerm_container_registry" "acr" {
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
   sku                 = "Basic"
-  admin_enabled       = false
+  admin_enabled       = true
   tags                = local.common_tags
 }
 
@@ -135,6 +135,7 @@ resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_service
 # 5. Azure Cache for Redis (Multi-Turn Session & Entity Digest Store)
 # ----------------------------------------------------------------------------
 resource "azurerm_redis_cache" "redis" {
+  count               = var.enable_redis ? 1 : 0
   name                = "redis-${local.name_prefix}-${random_string.suffix.result}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
@@ -155,14 +156,14 @@ resource "azurerm_redis_cache" "redis" {
 # 6. Azure OpenAI Service & GPT-4o Deployment
 # ----------------------------------------------------------------------------
 resource "azurerm_cognitive_account" "openai" {
-  count               = var.enable_azure_openai ? 1 : 0
-  name                = "oai-${local.name_prefix}-${random_string.suffix.result}"
-  location            = var.openai_location
-  resource_group_name = azurerm_resource_group.main.name
-  kind                = "OpenAI"
-  sku_name            = "S0"
+  count                 = var.enable_azure_openai ? 1 : 0
+  name                  = "oai-${local.name_prefix}-${random_string.suffix.result}"
+  location              = var.openai_location
+  resource_group_name   = azurerm_resource_group.main.name
+  kind                  = "OpenAI"
+  sku_name              = "S0"
   custom_subdomain_name = "oai-${local.name_prefix}-${random_string.suffix.result}"
-  tags                = local.common_tags
+  tags                  = local.common_tags
 }
 
 resource "azurerm_cognitive_deployment" "gpt4o" {
@@ -186,15 +187,15 @@ resource "azurerm_cognitive_deployment" "gpt4o" {
 # 7. Azure Key Vault (Centralized Secret Storage)
 # ----------------------------------------------------------------------------
 resource "azurerm_key_vault" "kv" {
-  name                        = substr("kv-${local.name_prefix}-${random_string.suffix.result}", 0, 24)
-  location                    = azurerm_resource_group.main.location
-  resource_group_name         = azurerm_resource_group.main.name
-  tenant_id                   = data.azurerm_client_config.current.tenant_id
-  sku_name                    = "standard"
-  enable_rbac_authorization   = true
-  purge_protection_enabled    = false
-  soft_delete_retention_days  = 7
-  tags                        = local.common_tags
+  name                       = substr("kv-${local.name_prefix}-${random_string.suffix.result}", 0, 24)
+  location                   = azurerm_resource_group.main.location
+  resource_group_name        = azurerm_resource_group.main.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  enable_rbac_authorization  = true
+  purge_protection_enabled   = false
+  soft_delete_retention_days = 7
+  tags                       = local.common_tags
 }
 
 resource "azurerm_role_assignment" "kv_admin_current" {
@@ -207,6 +208,28 @@ resource "azurerm_role_assignment" "kv_secrets_user_app" {
   scope                = azurerm_key_vault.kv.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.app_identity.principal_id
+}
+
+resource "azurerm_key_vault_secret" "db_password" {
+  name         = "postgres-admin-password"
+  value        = local.pg_password
+  key_vault_id = azurerm_key_vault.kv.id
+  depends_on   = [azurerm_role_assignment.kv_admin_current]
+}
+
+resource "azurerm_key_vault_secret" "database_ro_dsn" {
+  name         = "database-url-ro"
+  value        = local.postgres_ro_dsn
+  key_vault_id = azurerm_key_vault.kv.id
+  depends_on   = [azurerm_role_assignment.kv_admin_current]
+}
+
+resource "azurerm_key_vault_secret" "gemini_key" {
+  count        = var.gemini_api_key != "" ? 1 : 0
+  name         = "gemini-api-key"
+  value        = var.gemini_api_key
+  key_vault_id = azurerm_key_vault.kv.id
+  depends_on   = [azurerm_role_assignment.kv_admin_current]
 }
 
 # ----------------------------------------------------------------------------
@@ -222,7 +245,7 @@ resource "azurerm_container_app_environment" "env" {
 
 locals {
   postgres_ro_dsn = "postgresql://${var.postgres_admin_username}:${urlencode(local.pg_password)}@${azurerm_postgresql_flexible_server.postgres.fqdn}:5432/${azurerm_postgresql_flexible_server_database.ey_bi.name}?sslmode=require"
-  redis_tls_url   = "rediss://:${urlencode(azurerm_redis_cache.redis.primary_access_key)}@${azurerm_redis_cache.redis.hostname}:${azurerm_redis_cache.redis.ssl_port}/0"
+  redis_tls_url   = var.enable_redis ? "rediss://:${urlencode(azurerm_redis_cache.redis[0].primary_access_key)}@${azurerm_redis_cache.redis[0].hostname}:${azurerm_redis_cache.redis[0].ssl_port}/0" : ""
   openai_endpoint = var.enable_azure_openai ? azurerm_cognitive_account.openai[0].endpoint : ""
   openai_api_key  = var.enable_azure_openai ? azurerm_cognitive_account.openai[0].primary_access_key : ""
 }
@@ -239,6 +262,17 @@ resource "azurerm_container_app" "bi_agent" {
     identity_ids = [azurerm_user_assigned_identity.app_identity.id]
   }
 
+  registry {
+    server               = azurerm_container_registry.acr.login_server
+    username             = azurerm_container_registry.acr.admin_username
+    password_secret_name = "acr-password"
+  }
+
+  secret {
+    name  = "acr-password"
+    value = azurerm_container_registry.acr.admin_password
+  }
+
   secret {
     name  = "database-url-ro"
     value = local.postgres_ro_dsn
@@ -246,7 +280,7 @@ resource "azurerm_container_app" "bi_agent" {
 
   secret {
     name  = "redis-url"
-    value = local.redis_tls_url
+    value = local.redis_tls_url != "" ? local.redis_tls_url : "none"
   }
 
   secret {
@@ -335,22 +369,6 @@ resource "azurerm_container_app" "bi_agent" {
       env {
         name  = "LOG_AUDIT_RETENTION_DAYS"
         value = tostring(var.log_retention_days)
-      }
-
-      liveness_probe {
-        transport               = "HTTP"
-        path                    = "/api/health"
-        port                    = 8000
-        initial_delay           = 10
-        interval_seconds        = 30
-        failure_count_threshold = 3
-      }
-
-      readiness_probe {
-        transport        = "HTTP"
-        path             = "/api/health"
-        port             = 8000
-        interval_seconds = 15
       }
     }
   }

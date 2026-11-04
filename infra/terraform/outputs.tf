@@ -25,7 +25,7 @@ output "postgresql_database_name" {
 
 output "redis_hostname" {
   description = "Hostname of the Azure Cache for Redis instance."
-  value       = azurerm_redis_cache.redis.hostname
+  value       = var.enable_redis ? azurerm_redis_cache.redis[0].hostname : null
 }
 
 output "azure_openai_endpoint" {

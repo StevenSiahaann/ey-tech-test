@@ -57,6 +57,12 @@ variable "postgres_admin_password" {
   sensitive   = true
 }
 
+variable "enable_redis" {
+  description = "Whether to provision managed Azure Cache for Redis. If false, backend uses built-in high-performance in-memory session cache ($0 cost)."
+  type        = bool
+  default     = false
+}
+
 variable "redis_sku_name" {
   description = "SKU tier for Azure Cache for Redis (Basic, Standard, Premium)."
   type        = string
